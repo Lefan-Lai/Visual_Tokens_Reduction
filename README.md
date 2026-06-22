@@ -10,6 +10,8 @@ against prototype-reduced visual tokens on POPE adversarial.
   `proto_reduce` methods.
 - `ALGORITHM.md`: detailed explanation of the current ProtoReduce algorithm
   and how it is inserted into LLaVA 13B.
+- `EARLY_SEMREDUCE_ALGORITHM.md`: very detailed derivation of the
+  Early-SemReduce semantic-response guided token reduction method.
 - `requirements.txt`: Python dependencies for running the experiment.
 
 ## Quick Run
