@@ -12,6 +12,9 @@ against prototype-reduced visual tokens on POPE adversarial.
   and how it is inserted into LLaVA 13B.
 - `EARLY_SEMREDUCE_ALGORITHM.md`: very detailed derivation of the
   Early-SemReduce semantic-response guided token reduction method.
+- `EARLY_SEMREDUCE_IMPLEMENTATION.md`: detailed notes on how the
+  Early-SemReduce code is implemented, including reducer internals, ViT
+  insertion, LLaVA hooks, placeholder handling, and POPE evaluation flow.
 - `requirements.txt`: Python dependencies for running the experiment.
 
 ## Quick Run
