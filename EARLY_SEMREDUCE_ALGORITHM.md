@@ -8,7 +8,9 @@
 
 核心思想可以写成：
 
-$$I \rightarrow F_{1:\ell} \rightarrow X^{(\ell)} \rightarrow \mathrm{SemReduce} \rightarrow \widetilde X^{(\ell)} \rightarrow F_{\ell+1:L} \rightarrow \mathrm{output}.$$
+$$
+I \rightarrow F_{1:\ell} \rightarrow X^{(\ell)} \rightarrow \mathrm{SemReduce} \rightarrow \widetilde X^{(\ell)} \rightarrow F_{\ell+1:L} \rightarrow \mathrm{output}.
+$$
 
 其中，原始 patch tokens 数量是 $n$，压缩后的 prototype patch tokens 数量是 $m$，并且通常 $m \ll n$。
 
@@ -18,7 +20,9 @@ $$I \rightarrow F_{1:\ell} \rightarrow X^{(\ell)} \rightarrow \mathrm{SemReduce}
 
 视觉 Transformer 和视觉语言模型通常会把一张图像切成很多 patch tokens。例如 ViT-L/14、CLIP-ViT、LLaVA 的 vision tower 或 Qwen-VL 的视觉编码器，都会生成一个视觉 token 序列：
 
-$$X = [x_{\mathrm{cls}}, x_1, x_2, \dots, x_n],$$
+$$
+X = [x_{\mathrm{cls}}, x_1, x_2, \dots, x_n],
+$$
 
 其中：
 
@@ -29,15 +33,21 @@ $$X = [x_{\mathrm{cls}}, x_1, x_2, \dots, x_n],$$
 
 在 Transformer 中，self-attention 的主要计算量近似是：
 
-$$\mathcal{O}(n^2 d).$$
+$$
+\mathcal{O}(n^2 d).
+$$
 
 当 patch tokens 很多时，后续每一层都要处理 $n$ 个 token，成本会很高。直观地说，如果我们能把 $n$ 个 patch tokens 合并成 $m$ 个更少但更有代表性的 prototype tokens，后续层的 self-attention 成本就会从：
 
-$$\mathcal{O}(n^2 d)$$
+$$
+\mathcal{O}(n^2 d)
+$$
 
 下降到：
 
-$$\mathcal{O}(m^2 d).$$
+$$
+\mathcal{O}(m^2 d).
+$$
 
 如果 $m \ll n$，这个下降会非常明显。
 
@@ -60,7 +70,9 @@ Early-SemReduce 的目标是：
 
 已有的 ProtoReduce 通常做的是：
 
-$$\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{x_i\}_{i=1}^{n} \right).$$
+$$
+\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{x_i\}_{i=1}^{n} \right).
+$$
 
 也就是说，它问的是：
 
@@ -68,7 +80,9 @@ $$\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{x_i\}_{i=1}^{n} \right).$$
 
 Early-SemReduce 做的是：
 
-$$\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{ W_{\mathcal S}\mathrm{LN}(x_i^{(\ell)}) \}_{i=1}^{n} \right).$$
+$$
+\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{ W_{\mathcal S}\mathrm{LN}(x_i^{(\ell)}) \}_{i=1}^{n} \right).
+$$
 
 也就是说，它问的是：
 
@@ -81,7 +95,9 @@ $$\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{ W_{\mathcal S}\mathrm{LN}(x_i^{
 
 但是，两者在最终生成 prototype token 时都应该回到原始视觉 token 空间：
 
-$$r_j^{(\ell)} = \sum_{i \in C_j} \alpha_i^{(j)} x_i^{(\ell)}.$$
+$$
+r_j^{(\ell)} = \sum_{i \in C_j} \alpha_i^{(j)} x_i^{(\ell)}.
+$$
 
 也就是说：
 
@@ -96,7 +112,9 @@ $$r_j^{(\ell)} = \sum_{i \in C_j} \alpha_i^{(j)} x_i^{(\ell)}.$$
 
 给定一张图像 $I$，视觉编码器有 $L$ 层 Transformer：
 
-$$F = F_{1:L}.$$
+$$
+F = F_{1:L}.
+$$
 
 其中：
 
@@ -106,11 +124,15 @@ $$F = F_{1:L}.$$
 
 Early-SemReduce 首先只运行前 $\ell$ 层：
 
-$$X^{(\ell)} = F_{1:\ell}(I).$$
+$$
+X^{(\ell)} = F_{1:\ell}(I).
+$$
 
 得到中间层 token 序列：
 
-$$X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, x_2^{(\ell)}, \dots, x_n^{(\ell)} ].$$
+$$
+X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, x_2^{(\ell)}, \dots, x_n^{(\ell)} ].
+$$
 
 这里：
 
@@ -121,7 +143,9 @@ $$X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, x_2^{(\ell)}, \dots, x
 
 假设模型已有一个 frozen classifier head：
 
-$$W_{\mathrm{cls}} \in \mathbb{R}^{K \times d},$$
+$$
+W_{\mathrm{cls}} \in \mathbb{R}^{K \times d},
+$$
 
 其中：
 
@@ -131,15 +155,21 @@ $$W_{\mathrm{cls}} \in \mathbb{R}^{K \times d},$$
 
 Early-SemReduce 希望把 $n$ 个 patch tokens 压缩成 $m$ 个 semantic prototype tokens：
 
-$$R^{(\ell)} = [ r_1^{(\ell)}, r_2^{(\ell)}, \dots, r_m^{(\ell)} ], \qquad m \ll n.$$
+$$
+R^{(\ell)} = [ r_1^{(\ell)}, r_2^{(\ell)}, \dots, r_m^{(\ell)} ], \qquad m \ll n.
+$$
 
 最后把序列替换为：
 
-$$\widetilde X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, r_1^{(\ell)}, r_2^{(\ell)}, \dots, r_m^{(\ell)} ],$$
+$$
+\widetilde X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, r_1^{(\ell)}, r_2^{(\ell)}, \dots, r_m^{(\ell)} ],
+$$
 
 再送入后续视觉层：
 
-$$H^{(L)} = F_{\ell+1:L} \left( \widetilde X^{(\ell)} \right).$$
+$$
+H^{(L)} = F_{\ell+1:L} \left( \widetilde X^{(\ell)} \right).
+$$
 
 ---
 
@@ -147,31 +177,43 @@ $$H^{(L)} = F_{\ell+1:L} \left( \widetilde X^{(\ell)} \right).$$
 
 Early-SemReduce 的 forward 是：
 
-$$I \rightarrow F_{1:\ell} \rightarrow \mathrm{SemReduce} \rightarrow F_{\ell+1:L}.$$
+$$
+I \rightarrow F_{1:\ell} \rightarrow \mathrm{SemReduce} \rightarrow F_{\ell+1:L}.
+$$
 
 它不是：
 
-$$I \rightarrow F_{1:L} \rightarrow \mathrm{SemReduce}.$$
+$$
+I \rightarrow F_{1:L} \rightarrow \mathrm{SemReduce}.
+$$
 
 更不是：
 
-$$I \rightarrow F_{1:L} \rightarrow \mathrm{SemReduce} \rightarrow F_{1:L}.$$
+$$
+I \rightarrow F_{1:L} \rightarrow \mathrm{SemReduce} \rightarrow F_{1:L}.
+$$
 
 因此它不会额外完整跑一遍图像。计算节省来自后续层处理的 token 数变少：
 
 原始视觉编码器后半段要处理：
 
-$$n \mathrm{patch\ tokens}.$$
+$$
+n \mathrm{patch\ tokens}.
+$$
 
 Early-SemReduce 后，后半段只处理：
 
-$$m \mathrm{prototype\ patch\ tokens}.$$
+$$
+m \mathrm{prototype\ patch\ tokens}.
+$$
 
 只要 $\ell$ 不太晚，且 $m \ll n$，后续层 self-attention 的成本就会显著下降。
 
 一般建议：
 
-$$\ell \in \left[ \frac{L}{4}, \frac{L}{2} \right].$$
+$$
+\ell \in \left[ \frac{L}{4}, \frac{L}{2} \right].
+$$
 
 原因是：
 
@@ -184,11 +226,15 @@ $$\ell \in \left[ \frac{L}{4}, \frac{L}{2} \right].$$
 
 第一步只运行前 $\ell$ 层：
 
-$$X^{(\ell)} = F_{1:\ell}(I).$$
+$$
+X^{(\ell)} = F_{1:\ell}(I).
+$$
 
 得到：
 
-$$X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, \dots, x_n^{(\ell)} ].$$
+$$
+X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, \dots, x_n^{(\ell)} ].
+$$
 
 这一步的输入是原图 $I$，输出是中间层 token。注意这里不要先跑完整个视觉编码器。SemReduce 必须插入在第 $\ell$ 层后面，这样才能让第 $\ell+1$ 到第 $L$ 层真正少算 token。
 
@@ -216,29 +262,41 @@ patches:   [n, d]
 
 先对 CLS token 做 frozen layer norm：
 
-$$\bar x_{\mathrm{cls}}^{(\ell)} = \mathrm{LN} \left( x_{\mathrm{cls}}^{(\ell)} \right).$$
+$$
+\bar x_{\mathrm{cls}}^{(\ell)} = \mathrm{LN} \left( x_{\mathrm{cls}}^{(\ell)} \right).
+$$
 
 然后计算图像级 semantic response：
 
-$$g^{(\ell)} = W_{\mathrm{cls}} \bar x_{\mathrm{cls}}^{(\ell)}.$$
+$$
+g^{(\ell)} = W_{\mathrm{cls}} \bar x_{\mathrm{cls}}^{(\ell)}.
+$$
 
 其中：
 
-$$g^{(\ell)} \in \mathbb{R}^{K}.$$
+$$
+g^{(\ell)} \in \mathbb{R}^{K}.
+$$
 
 $g_c^{(\ell)}$ 可以理解为当前中间层全局 token 对类别 $c$ 的响应。
 
 然后取 top-$k$ 个候选类别：
 
-$$\mathcal S = \mathrm{TopK} \left( g^{(\ell)}, k \right).$$
+$$
+\mathcal S = \mathrm{TopK} \left( g^{(\ell)}, k \right).
+$$
 
 其中：
 
-$$|\mathcal S| = k, \qquad k \ll K.$$
+$$
+|\mathcal S| = k, \qquad k \ll K.
+$$
 
 如果 $K$ 本来就不大，也可以直接令：
 
-$$\mathcal S = \{1, 2, \dots, K\}.$$
+$$
+\mathcal S = \{1, 2, \dots, K\}.
+$$
 
 候选类别选择的作用：
 
@@ -262,23 +320,33 @@ W_S:          [k, d]
 
 对于每个 patch token $x_i^{(\ell)}$，先做 frozen layer norm：
 
-$$\bar x_i^{(\ell)} = \mathrm{LN} \left( x_i^{(\ell)} \right).$$
+$$
+\bar x_i^{(\ell)} = \mathrm{LN} \left( x_i^{(\ell)} \right).
+$$
 
 取候选类别对应的 classifier rows：
 
-$$W_{\mathcal S} \in \mathbb{R}^{k \times d}.$$
+$$
+W_{\mathcal S} \in \mathbb{R}^{k \times d}.
+$$
 
 然后计算 patch-level semantic response：
 
-$$p_i^{(\ell)} = W_{\mathcal S} \bar x_i^{(\ell)}.$$
+$$
+p_i^{(\ell)} = W_{\mathcal S} \bar x_i^{(\ell)}.
+$$
 
 其中：
 
-$$p_i^{(\ell)} \in \mathbb{R}^{k}.$$
+$$
+p_i^{(\ell)} \in \mathbb{R}^{k}.
+$$
 
 展开写：
 
-$$p_i^{(\ell)} = [p_{i,c_1}^{(\ell)}, p_{i,c_2}^{(\ell)}, \dots, p_{i,c_k}^{(\ell)}], \qquad c_1,\dots,c_k \in \mathcal S.$$
+$$
+p_i^{(\ell)} = [p_{i,c_1}^{(\ell)}, p_{i,c_2}^{(\ell)}, \dots, p_{i,c_k}^{(\ell)}], \qquad c_1,\dots,c_k \in \mathcal S.
+$$
 
 这个向量表示第 $i$ 个 patch 对当前候选类别集合的响应模式。
 
@@ -291,11 +359,15 @@ $$p_i^{(\ell)} = [p_{i,c_1}^{(\ell)}, p_{i,c_2}^{(\ell)}, \dots, p_{i,c_k}^{(\el
 
 Early-SemReduce 后续聚类看的不是：
 
-$$\cos \left( x_i^{(\ell)}, x_j^{(\ell)} \right),$$
+$$
+\cos \left( x_i^{(\ell)}, x_j^{(\ell)} \right),
+$$
 
 而是：
 
-$$\cos \left( p_i^{(\ell)}, p_j^{(\ell)} \right).$$
+$$
+\cos \left( p_i^{(\ell)}, p_j^{(\ell)} \right).
+$$
 
 张量形状：
 
@@ -318,27 +390,39 @@ P:             [n, k]
 
 对每个候选类别 $c \in \mathcal S$，计算所有 patch 上的均值：
 
-$$\mu_c = \frac{1}{n} \sum_{i=1}^{n} p_{i,c}^{(\ell)}.$$
+$$
+\mu_c = \frac{1}{n} \sum_{i=1}^{n} p_{i,c}^{(\ell)}.
+$$
 
 计算标准差：
 
-$$\sigma_c = \sqrt{ \frac{1}{n} \sum_{i=1}^{n} \left( p_{i,c}^{(\ell)} - \mu_c \right)^2 }.$$
+$$
+\sigma_c = \sqrt{ \frac{1}{n} \sum_{i=1}^{n} \left( p_{i,c}^{(\ell)} - \mu_c \right)^2 }.
+$$
 
 然后标准化：
 
-$$\hat p_{i,c}^{(\ell)} = \frac{ p_{i,c}^{(\ell)} - \mu_c }{ \sigma_c + \epsilon }.$$
+$$
+\hat p_{i,c}^{(\ell)} = \frac{ p_{i,c}^{(\ell)} - \mu_c }{ \sigma_c + \epsilon }.
+$$
 
 得到标准化后的 response vector：
 
-$$\hat p_i^{(\ell)} = [ \hat p_{i,c_1}^{(\ell)}, \hat p_{i,c_2}^{(\ell)}, \dots, \hat p_{i,c_k}^{(\ell)} ].$$
+$$
+\hat p_i^{(\ell)} = [ \hat p_{i,c_1}^{(\ell)}, \hat p_{i,c_2}^{(\ell)}, \dots, \hat p_{i,c_k}^{(\ell)} ].
+$$
 
 再做 L2 归一化：
 
-$$q_i^{(\ell)} = \frac{ \hat p_i^{(\ell)} }{ \left\| \hat p_i^{(\ell)} \right\|_2 + \epsilon }.$$
+$$
+q_i^{(\ell)} = \frac{ \hat p_i^{(\ell)} }{ \left\| \hat p_i^{(\ell)} \right\|_2 + \epsilon }.
+$$
 
 其中：
 
-$$q_i^{(\ell)} \in \mathbb{R}^{k}.$$
+$$
+q_i^{(\ell)} \in \mathbb{R}^{k}.
+$$
 
 $q_i$ 才是后续聚类使用的 semantic response token。
 
@@ -368,7 +452,9 @@ Q:       [n, k]
 
 定义第 $i$ 个 patch 的 semantic importance：
 
-$$u_i = \max_{c \in \mathcal S} \hat p_{i,c}^{(\ell)} - \frac{1}{k} \sum_{c \in \mathcal S} \hat p_{i,c}^{(\ell)}.$$
+$$
+u_i = \max_{c \in \mathcal S} \hat p_{i,c}^{(\ell)} - \frac{1}{k} \sum_{c \in \mathcal S} \hat p_{i,c}^{(\ell)}.
+$$
 
 直觉：
 
@@ -378,11 +464,15 @@ $$u_i = \max_{c \in \mathcal S} \hat p_{i,c}^{(\ell)} - \frac{1}{k} \sum_{c \in 
 
 然后对所有 patch 的 $u_i$ 再做一次标准化：
 
-$$\tilde u_i = \frac{ u_i - \mathrm{mean}(u) }{ \mathrm{std}(u) + \epsilon }.$$
+$$
+\tilde u_i = \frac{ u_i - \mathrm{mean}(u) }{ \mathrm{std}(u) + \epsilon }.
+$$
 
 其中：
 
-$$\tilde u_i \in \mathbb{R}.$$
+$$
+\tilde u_i \in \mathbb{R}.
+$$
 
 这个标量表示第 $i$ 个 patch 的相对语义重要性。
 
@@ -417,35 +507,49 @@ u_tilde:  [n]
 
 因此 Early-SemReduce 先选择 top-$b$ 个最重要的 patch 作为 semantic anchors：
 
-$$\mathcal A = \mathrm{TopB} \left( \tilde u_i, b \right).$$
+$$
+\mathcal A = \mathrm{TopB} \left( \tilde u_i, b \right).
+$$
 
 其中：
 
-$$|\mathcal A| = b.$$
+$$
+|\mathcal A| = b.
+$$
 
 这些 anchor tokens 直接成为 singleton clusters：
 
-$$C_j = \{a_j\}, \qquad a_j \in \mathcal A, \qquad j = 1,\dots,b.$$
+$$
+C_j = \{a_j\}, \qquad a_j \in \mathcal A, \qquad j = 1,\dots,b.
+$$
 
 对应 prototype token 直接是原 token：
 
-$$r_j^{(\ell)} = x_{a_j}^{(\ell)}.$$
+$$
+r_j^{(\ell)} = x_{a_j}^{(\ell)}.
+$$
 
 这样最重要的 $b$ 个 patch 不会被平均掉。
 
 如果不想显式保护 anchor，可以设置：
 
-$$b = 0.$$
+$$
+b = 0.
+$$
 
 这时所有 patch 都进入普通 semantic clustering。
 
 注意约束：
 
-$$0 \le b \le m.$$
+$$
+0 \le b \le m.
+$$
 
 如果用户给的 $b > m$，实现中应该自动裁剪为：
 
-$$b \leftarrow m.$$
+$$
+b \leftarrow m.
+$$
 
 ---
 
@@ -453,19 +557,27 @@ $$b \leftarrow m.$$
 
 去掉 anchors 后，剩余 patch 集合为：
 
-$$\mathcal U = \{1,2,\dots,n\} \setminus \mathcal A.$$
+$$
+\mathcal U = \{1,2,\dots,n\} \setminus \mathcal A.
+$$
 
 剩余需要生成的 cluster 数量是：
 
-$$M = m - b.$$
+$$
+M = m - b.
+$$
 
 目标是把 $\mathcal U$ 中的 patch 分成：
 
-$$D_1, D_2, \dots, D_M.$$
+$$
+D_1, D_2, \dots, D_M.
+$$
 
 最终完整的 $m$ 个 cluster 是：
 
-$$C_1,\dots,C_b,D_1,\dots,D_M.$$
+$$
+C_1,\dots,C_b,D_1,\dots,D_M.
+$$
 
 其中：
 
@@ -480,11 +592,15 @@ $$C_1,\dots,C_b,D_1,\dots,D_M.$$
 
 第一个非 anchor 中心选择剩余 patch 中最重要的 token：
 
-$$s_1 = \arg\max_{i \in \mathcal U} \tilde u_i.$$
+$$
+s_1 = \arg\max_{i \in \mathcal U} \tilde u_i.
+$$
 
 初始化：
 
-$$\mu_1 = q_{s_1}^{(\ell)}.$$
+$$
+\mu_1 = q_{s_1}^{(\ell)}.
+$$
 
 后续中心同时考虑：
 
@@ -493,15 +609,21 @@ $$\mu_1 = q_{s_1}^{(\ell)}.$$
 
 对第 $t$ 个中心：
 
-$$s_t = \arg\max_{i \in \mathcal U} \left[ \tilde u_i + \lambda_{\mathrm{div}} \min_{r < t} \left( 1 - \left(q_i^{(\ell)}\right)^\top q_{s_r}^{(\ell)} \right) \right],$$
+$$
+s_t = \arg\max_{i \in \mathcal U} \left[ \tilde u_i + \lambda_{\mathrm{div}} \min_{r < t} \left( 1 - \left(q_i^{(\ell)}\right)^\top q_{s_r}^{(\ell)} \right) \right],
+$$
 
 其中：
 
-$$t = 2,\dots,M.$$
+$$
+t = 2,\dots,M.
+$$
 
 然后：
 
-$$\mu_t = q_{s_t}^{(\ell)}.$$
+$$
+\mu_t = q_{s_t}^{(\ell)}.
+$$
 
 这里：
 
@@ -534,19 +656,27 @@ centers:   [M, k]
 
 有了中心 $\mu_1,\dots,\mu_M$ 后，对每个非 anchor patch，按照 semantic response similarity 分配 cluster：
 
-$$g_i = \arg\max_{t \in \{1,\dots,M\}} \left(q_i^{(\ell)}\right)^\top \mu_t, \qquad i \in \mathcal U.$$
+$$
+g_i = \arg\max_{t \in \{1,\dots,M\}} \left(q_i^{(\ell)}\right)^\top \mu_t, \qquad i \in \mathcal U.
+$$
 
 然后：
 
-$$D_t = \{i \in \mathcal U \mid g_i = t\}.$$
+$$
+D_t = \{i \in \mathcal U \mid g_i = t\}.
+$$
 
 这里的 assignment 使用的是：
 
-$$\left(q_i^{(\ell)}\right)^\top \mu_t,$$
+$$
+\left(q_i^{(\ell)}\right)^\top \mu_t,
+$$
 
 不是：
 
-$$\left(x_i^{(\ell)}\right)^\top c_t.$$
+$$
+\left(x_i^{(\ell)}\right)^\top c_t.
+$$
 
 这就是 semantic clustering 的核心。
 
@@ -558,7 +688,9 @@ $$\left(x_i^{(\ell)}\right)^\top c_t.$$
 
 对于每个 cluster $D_t$，用 semantic importance 加权更新中心：
 
-$$\mu_t = \frac{ \sum_{i \in D_t} \exp \left( \gamma \tilde u_i \right) q_i^{(\ell)} }{ \left\| \sum_{i \in D_t} \exp \left( \gamma \tilde u_i \right) q_i^{(\ell)} \right\|_2 + \epsilon }.$$
+$$
+\mu_t = \frac{ \sum_{i \in D_t} \exp \left( \gamma \tilde u_i \right) q_i^{(\ell)} }{ \left\| \sum_{i \in D_t} \exp \left( \gamma \tilde u_i \right) q_i^{(\ell)} \right\|_2 + \epsilon }.
+$$
 
 其中：
 
@@ -568,7 +700,9 @@ $$\mu_t = \frac{ \sum_{i \in D_t} \exp \left( \gamma \tilde u_i \right) q_i^{(\e
 
 当 $\gamma=0$：
 
-$$\mu_t = \mathrm{Normalize} \left( \sum_{i \in D_t} q_i^{(\ell)} \right).$$
+$$
+\mu_t = \mathrm{Normalize} \left( \sum_{i \in D_t} q_i^{(\ell)} \right).
+$$
 
 重复 assignment 和 update 共 $T$ 次。
 
@@ -586,17 +720,23 @@ T = 3 to 8
 
 semantic clustering 可能出现空 cluster：
 
-$$D_t = \varnothing.$$
+$$
+D_t = \varnothing.
+$$
 
 空 cluster 会导致 prototype 数量少于 $m$，所以必须处理。
 
 一种处理方式是重新初始化该中心：
 
-$$\mu_t = q_{i^\star}^{(\ell)}.$$
+$$
+\mu_t = q_{i^\star}^{(\ell)}.
+$$
 
 其中：
 
-$$i^\star = \arg\max_{i \in \mathcal U} \left[ \tilde u_i + \min_{r \ne t} \left( 1 - \left(q_i^{(\ell)}\right)^\top \mu_r \right) \right].$$
+$$
+i^\star = \arg\max_{i \in \mathcal U} \left[ \tilde u_i + \min_{r \ne t} \left( 1 - \left(q_i^{(\ell)}\right)^\top \mu_r \right) \right].
+$$
 
 含义：
 
@@ -612,7 +752,9 @@ $$i^\star = \arg\max_{i \in \mathcal U} \left[ \tilde u_i + \min_{r \ne t} \left
 
 这样能保证：
 
-$$\sum_{j=1}^{m} |C_j| = n.$$
+$$
+\sum_{j=1}^{m} |C_j| = n.
+$$
 
 也就是每个原始 patch 恰好属于一个 prototype cluster。
 
@@ -630,21 +772,29 @@ $$\sum_{j=1}^{m} |C_j| = n.$$
 
 对于 anchor cluster：
 
-$$C_j = \{a_j\}, \qquad j = 1,\dots,b,$$
+$$
+C_j = \{a_j\}, \qquad j = 1,\dots,b,
+$$
 
 直接令：
 
-$$r_j^{(\ell)} = x_{a_j}^{(\ell)}.$$
+$$
+r_j^{(\ell)} = x_{a_j}^{(\ell)}.
+$$
 
 ### 16.2 普通 semantic cluster
 
 对于普通 cluster：
 
-$$D_t, \qquad t = 1,\dots,M,$$
+$$
+D_t, \qquad t = 1,\dots,M,
+$$
 
 先计算 cluster 内每个 patch 的聚合分数：
 
-$$s_i^{(t)} = \left(q_i^{(\ell)}\right)^\top \mu_t + \lambda_{\mathrm{imp}} \tilde u_i, \qquad i \in D_t.$$
+$$
+s_i^{(t)} = \left(q_i^{(\ell)}\right)^\top \mu_t + \lambda_{\mathrm{imp}} \tilde u_i, \qquad i \in D_t.
+$$
 
 其中：
 
@@ -654,15 +804,21 @@ $$s_i^{(t)} = \left(q_i^{(\ell)}\right)^\top \mu_t + \lambda_{\mathrm{imp}} \til
 
 然后用 softmax 得到聚合权重：
 
-$$\alpha_i^{(t)} = \frac{ \exp \left( s_i^{(t)} / \tau \right) }{ \sum_{l \in D_t} \exp \left( s_l^{(t)} / \tau \right) }.$$
+$$
+\alpha_i^{(t)} = \frac{ \exp \left( s_i^{(t)} / \tau \right) }{ \sum_{l \in D_t} \exp \left( s_l^{(t)} / \tau \right) }.
+$$
 
 满足：
 
-$$\sum_{i \in D_t} \alpha_i^{(t)} = 1, \qquad \alpha_i^{(t)} \ge 0.$$
+$$
+\sum_{i \in D_t} \alpha_i^{(t)} = 1, \qquad \alpha_i^{(t)} \ge 0.
+$$
 
 最终 prototype token：
 
-$$r_{b+t}^{(\ell)} = \sum_{i \in D_t} \alpha_i^{(t)} x_i^{(\ell)}.$$
+$$
+r_{b+t}^{(\ell)} = \sum_{i \in D_t} \alpha_i^{(t)} x_i^{(\ell)}.
+$$
 
 注意这里加权的是原始视觉 token $x_i^{(\ell)}$，不是 $q_i^{(\ell)}$。
 
@@ -691,23 +847,33 @@ tau = 0.05 to 0.2
 
 设第 $i$ 个 patch 的二维位置是：
 
-$$\pi_i = (h_i, w_i).$$
+$$
+\pi_i = (h_i, w_i).
+$$
 
 对于 anchor token：
 
-$$\pi_j^r = \pi_{a_j}.$$
+$$
+\pi_j^r = \pi_{a_j}.
+$$
 
 对于普通 prototype：
 
-$$\pi_{b+t}^r = \sum_{i \in D_t} \alpha_i^{(t)} \pi_i.$$
+$$
+\pi_{b+t}^r = \sum_{i \in D_t} \alpha_i^{(t)} \pi_i.
+$$
 
 然后按 raster order 排序：
 
-$$\mathrm{top-left} \rightarrow \mathrm{bottom-right}.$$
+$$
+\mathrm{top-left} \rightarrow \mathrm{bottom-right}.
+$$
 
 排序后的 prototype 序列为：
 
-$$\widetilde R^{(\ell)} = \mathrm{SortByPosition} \left( R^{(\ell)} \right).$$
+$$
+\widetilde R^{(\ell)} = \mathrm{SortByPosition} \left( R^{(\ell)} \right).
+$$
 
 这样可以尽量保留二维空间结构。
 
@@ -715,7 +881,9 @@ $$\widetilde R^{(\ell)} = \mathrm{SortByPosition} \left( R^{(\ell)} \right).$$
 
 如果模型使用标准 ViT absolute position embedding，并且 position embedding 已经在输入层加进 token：
 
-$$x_i^{(0)} = \mathrm{PatchEmbed}(I)_i + e_i^{\mathrm{pos}},$$
+$$
+x_i^{(0)} = \mathrm{PatchEmbed}(I)_i + e_i^{\mathrm{pos}},
+$$
 
 那么中间层 reduction 时通常不需要重新加 position embedding，因为位置信息已经混入 hidden representation。
 
@@ -725,13 +893,17 @@ $$x_i^{(0)} = \mathrm{PatchEmbed}(I)_i + e_i^{\mathrm{pos}},$$
 
 这时可以使用 soft position：
 
-$$\pi_j^r$$
+$$
+\pi_j^r
+$$
 
 来计算 reduced tokens 之间的相对位置。
 
 例如相对位移：
 
-$$\Delta \pi_{a,b}^r = \pi_a^r - \pi_b^r.$$
+$$
+\Delta \pi_{a,b}^r = \pi_a^r - \pi_b^r.
+$$
 
 这可以作为 relative position bias 或 RoPE 坐标的近似输入。
 
@@ -741,21 +913,29 @@ $$\Delta \pi_{a,b}^r = \pi_a^r - \pi_b^r.$$
 
 原始第 $\ell$ 层后的序列是：
 
-$$[ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, \dots, x_n^{(\ell)} ].$$
+$$
+[ x_{\mathrm{cls}}^{(\ell)}, x_1^{(\ell)}, \dots, x_n^{(\ell)} ].
+$$
 
 Early-SemReduce 替换为：
 
-$$\widetilde X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, \widetilde r_1^{(\ell)}, \widetilde r_2^{(\ell)}, \dots, \widetilde r_m^{(\ell)} ].$$
+$$
+\widetilde X^{(\ell)} = [ x_{\mathrm{cls}}^{(\ell)}, \widetilde r_1^{(\ell)}, \widetilde r_2^{(\ell)}, \dots, \widetilde r_m^{(\ell)} ].
+$$
 
 其中 $\widetilde r_j$ 表示按 soft position 排序后的 prototype。
 
 然后继续运行后续视觉层：
 
-$$H^{(L)} = F_{\ell+1:L} \left( \widetilde X^{(\ell)} \right).$$
+$$
+H^{(L)} = F_{\ell+1:L} \left( \widetilde X^{(\ell)} \right).
+$$
 
 对于分类模型，最终预测可以写成：
 
-$$\hat y = \mathrm{softmax} \left( W_{\mathrm{cls}} \mathrm{LN} \left( h_{\mathrm{cls}}^{(L)} \right) \right).$$
+$$
+\hat y = \mathrm{softmax} \left( W_{\mathrm{cls}} \mathrm{LN} \left( h_{\mathrm{cls}}^{(L)} \right) \right).
+$$
 
 对于视觉语言模型，后续可能是：
 
@@ -887,23 +1067,37 @@ Output:
 
 Early-SemReduce 可以浓缩为以下几行：
 
-$$X^{(\ell)} = F_{1:\ell}(I),$$
+$$
+X^{(\ell)} = F_{1:\ell}(I),
+$$
 
-$$p_i^{(\ell)} = W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right),$$
+$$
+p_i^{(\ell)} = W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right),
+$$
 
-$$q_i^{(\ell)} = \mathrm{Normalize} \left( \mathrm{Std} \left( p_i^{(\ell)} \right) \right),$$
+$$
+q_i^{(\ell)} = \mathrm{Normalize} \left( \mathrm{Std} \left( p_i^{(\ell)} \right) \right),
+$$
 
-$$\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{q_i^{(\ell)}\}_{i=1}^{n}, m \right),$$
+$$
+\{C_j\}_{j=1}^{m} = \mathrm{Cluster} \left( \{q_i^{(\ell)}\}_{i=1}^{n}, m \right),
+$$
 
-$$r_j^{(\ell)} = \sum_{i \in C_j} \alpha_i^{(j)} x_i^{(\ell)}.$$
+$$
+r_j^{(\ell)} = \sum_{i \in C_j} \alpha_i^{(j)} x_i^{(\ell)}.
+$$
 
 其中：
 
-$$\alpha_i^{(j)} = \frac{ \exp \left( \frac{ \left(q_i^{(\ell)}\right)^\top \mu_j + \lambda_{\mathrm{imp}} \tilde u_i }{ \tau } \right) }{ \sum_{l \in C_j} \exp \left( \frac{ \left(q_l^{(\ell)}\right)^\top \mu_j + \lambda_{\mathrm{imp}} \tilde u_l }{ \tau } \right) }.$$
+$$
+\alpha_i^{(j)} = \frac{ \exp \left( \frac{ \left(q_i^{(\ell)}\right)^\top \mu_j + \lambda_{\mathrm{imp}} \tilde u_i }{ \tau } \right) }{ \sum_{l \in C_j} \exp \left( \frac{ \left(q_l^{(\ell)}\right)^\top \mu_j + \lambda_{\mathrm{imp}} \tilde u_l }{ \tau } \right) }.
+$$
 
 最终：
 
-$$H^{(L)} = F_{\ell+1:L} \left( [ x_{\mathrm{cls}}^{(\ell)}, r_1^{(\ell)}, \dots, r_m^{(\ell)} ] \right).$$
+$$
+H^{(L)} = F_{\ell+1:L} \left( [ x_{\mathrm{cls}}^{(\ell)}, r_1^{(\ell)}, \dots, r_m^{(\ell)} ] \right).
+$$
 
 ---
 
@@ -915,11 +1109,15 @@ Early-SemReduce 不引入任何需要训练的新参数。
 
 1. Frozen visual encoder:
 
-$$F_{1:L}.$$
+$$
+F_{1:L}.
+$$
 
 2. Frozen classifier head:
 
-$$W_{\mathrm{cls}}.$$
+$$
+W_{\mathrm{cls}}.
+$$
 
 3. 固定算子：
 
@@ -953,37 +1151,53 @@ position sorting
 
 假设每层 self-attention 主要复杂度为：
 
-$$\mathcal{O}(n^2 d).$$
+$$
+\mathcal{O}(n^2 d).
+$$
 
 原始视觉编码器复杂度约为：
 
-$$\mathcal{O}(L n^2 d).$$
+$$
+\mathcal{O}(L n^2 d).
+$$
 
 Early-SemReduce 复杂度约为：
 
-$$\mathcal{O}(\ell n^2 d) + \mathcal{O}((L-\ell)m^2 d) + \mathcal{O}(n k d) + \mathcal{O}(T n m k).$$
+$$
+\mathcal{O}(\ell n^2 d) + \mathcal{O}((L-\ell)m^2 d) + \mathcal{O}(n k d) + \mathcal{O}(T n m k).
+$$
 
 逐项解释：
 
 1. 前 $\ell$ 层仍然处理完整 token：
 
-$$\mathcal{O}(\ell n^2 d).$$
+$$
+\mathcal{O}(\ell n^2 d).
+$$
 
 2. 后续 $L-\ell$ 层只处理 $m$ 个 prototype tokens：
 
-$$\mathcal{O}((L-\ell)m^2 d).$$
+$$
+\mathcal{O}((L-\ell)m^2 d).
+$$
 
 3. 计算 patch-level semantic response：
 
-$$\mathcal{O}(n k d).$$
+$$
+\mathcal{O}(n k d).
+$$
 
 4. Semantic clustering 的 assignment/update：
 
-$$\mathcal{O}(T n m k).$$
+$$
+\mathcal{O}(T n m k).
+$$
 
 当：
 
-$$m \ll n, \qquad k \ll K,$$
+$$
+m \ll n, \qquad k \ll K,
+$$
 
 并且 $\ell$ 不太晚时，整体计算量会显著小于完整视觉编码器。
 
@@ -993,25 +1207,35 @@ $$m \ll n, \qquad k \ll K,$$
 
 一个 prototype token 可能代表多个原始 patch：
 
-$$\rho_j = |C_j|.$$
+$$
+\rho_j = |C_j|.
+$$
 
 如果直接用一个 token 替代多个 token，后续 attention 可能低估该区域的总贡献。直觉上，原本 cluster 中有 $|C_j|$ 个 key/value，现在只剩一个 key/value，它在 attention softmax 中的质量变小了。
 
 可以给每个 prototype token 一个 cluster mass：
 
-$$\rho_j = |C_j|.$$
+$$
+\rho_j = |C_j|.
+$$
 
 在后续 self-attention 中，对 key token $r_j$ 加 log-mass bias：
 
-$$A_{a,j} = \frac{ \exp \left( \frac{ Q_a K_j^\top }{ \sqrt d } + \log \rho_j \right) }{ \sum_t \exp \left( \frac{ Q_a K_t^\top }{ \sqrt d } + \log \rho_t \right) }.$$
+$$
+A_{a,j} = \frac{ \exp \left( \frac{ Q_a K_j^\top }{ \sqrt d } + \log \rho_j \right) }{ \sum_t \exp \left( \frac{ Q_a K_t^\top }{ \sqrt d } + \log \rho_t \right) }.
+$$
 
 直觉近似：
 
-$$\sum_{i \in C_j} \exp(Q_a K_i^\top) \approx |C_j| \exp(Q_a K_j^\top).$$
+$$
+\sum_{i \in C_j} \exp(Q_a K_i^\top) \approx |C_j| \exp(Q_a K_j^\top).
+$$
 
 所以：
 
-$$\log |C_j|$$
+$$
+\log |C_j|
+$$
 
 可以近似补偿多个 token 被压成一个 token 后的 attention mass 损失。
 
@@ -1109,7 +1333,9 @@ Early-SemReduce 需要 $W_{\mathrm{cls}}$。如果模型没有 ImageNet classifi
 
 1. 使用语言模型的 output embedding / LM head：
 
-$$W_{\mathrm{lm}} \in \mathbb{R}^{V \times d}.$$
+$$
+W_{\mathrm{lm}} \in \mathbb{R}^{V \times d}.
+$$
 
 如果 image features 已经投影到语言 hidden space，$W_{\mathrm{lm}}$ 可以作为 frozen semantic response head。
 
@@ -1371,15 +1597,21 @@ Early-SemReduce 不是无条件更好，可能失败的情况包括：
 
 如果只能保留一行公式，Early-SemReduce 的核心可以写成：
 
-$$r_j^{(\ell)} = \sum_{i \in C_j} \mathrm{Softmax}_{i \in C_j} \left( \frac{ \cos \left( W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right), \mu_j \right) + \lambda_{\mathrm{imp}} \tilde u_i }{ \tau } \right) x_i^{(\ell)}.$$
+$$
+r_j^{(\ell)} = \sum_{i \in C_j} \mathrm{Softmax}_{i \in C_j} \left( \frac{ \cos \left( W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right), \mu_j \right) + \lambda_{\mathrm{imp}} \tilde u_i }{ \tau } \right) x_i^{(\ell)}.
+$$
 
 其中：
 
-$$C_j$$
+$$
+C_j
+$$
 
 不是由视觉特征相似度决定，而是由：
 
-$$W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right)$$
+$$
+W_{\mathcal S} \mathrm{LN} \left( x_i^{(\ell)} \right)
+$$
 
 的语义响应相似度决定。
 
