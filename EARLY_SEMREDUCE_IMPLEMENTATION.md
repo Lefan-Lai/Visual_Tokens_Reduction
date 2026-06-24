@@ -42,6 +42,224 @@ run_llava13b_pope.py
 
 ---
 
+## 0. 先回答两个最重要的问题
+
+你现在关心的不是“算法听起来是什么”，而是代码到底有没有把算法做出来，以及代码
+里每个超参数到底取了什么值。这里先把结论写清楚。
+
+### 0.1 这份代码真的完成了 Early-SemReduce 吗
+
+答案分两层：
+
+```text
+核心 Early-SemReduce reducer: 完成了。
+timm/ViT 中间层 early reduction helper: 完成了。
+Hugging Face LLaVA 13B 的 POPE runner: 完成了 image-feature-level reduction，
+但不是 vision tower 内部 block-level early reduction。
+```
+
+更具体地说：
+
+| 算法组件 | 代码是否完成 | 代码位置 | 说明 |
+| --- | --- | --- | --- |
+| 输入 patch tokens | 完成 | `early_semreduce/reducer.py` | 支持 `[n, d]`、`[B, n, d]`、`[n + 1, d]`、`[B, n + 1, d]` |
+| 使用 frozen classifier / semantic head | 完成 | `_classifier_weight`、`_semantic_classifier_for` | ViT 用 classifier head；LLaVA 用 LM output/input embedding 作为 surrogate semantic head |
+| 用 CLS 或 fallback token 选候选类别 | 完成 | `_semantic_response` | 有 CLS 就用 CLS；LLaVA patch-only 情况用 patch mean |
+| TopK candidate classes | 完成 | `_semantic_response` | 代码实际默认 `candidate_classes=64`，即 TopK 的 K 是 64 |
+| patch-level semantic response | 完成 | `_semantic_response` | `responses = norm_patch @ selected_weight.T` |
+| response 标准化 | 完成 | `_semantic_response` | 对每个候选类别在 patch 维度做 mean/std |
+| L2 normalize semantic response | 完成 | `_semantic_response` | `q_tokens = F.normalize(p_hat, p=2, dim=-1)` |
+| semantic importance | 完成 | `_semantic_response` | `max response - mean response`，之后再标准化 |
+| TopB semantic anchors | 完成 | `_topk_indices`、`_early_semreduce_single` | 代码实际默认 `num_anchors=8`，即 TopB 的 B 是 8 |
+| semantic-aware center initialization | 完成 | `_initialize_centers` | 第一个中心取最高 importance，后续中心用 importance + diversity |
+| semantic clustering assignment | 完成 | `_cluster_semantic_tokens` | 用 `q_subset @ centers.T` 做 cosine assignment |
+| importance-aware center update | 完成 | `_cluster_semantic_tokens` | 用 `exp(gamma * importance)` 加权更新 center |
+| empty cluster reinitialize | 完成 | `_reinitialize_empty_center` | 空 center 用 importance + diversity 重新初始化 |
+| empty assignment repair | 完成 | `_repair_empty_assignments` | 最后保证每个普通 cluster 至少有一个 patch |
+| original visual token space aggregation | 完成 | `_aggregate_prototypes` | 最终 prototype 用原始 `patch_tokens` 加权求和，不用 `q_tokens` 替代 |
+| importance-aware soft aggregation | 完成 | `_aggregate_prototypes` | `semantic_scores + lambda_importance * importance` 后 softmax |
+| prototype mass bookkeeping | 完成 | `_aggregate_prototypes` | `masses` 记录每个 prototype 代表多少 patch |
+| soft position | 完成 | `_prepare_positions`、`_aggregate_prototypes` | 没传 positions 时自动构造 grid 或一维位置 |
+| position sorting | 完成 | `_position_order`、`_remap_assignments` | 默认 `sort_by_position=True` |
+| batch support | 完成 | `early_semreduce`、`EarlySemReduce.forward` | batch 内每张图独立 reduce |
+| timm ViT 真正 early 插入 | 完成 | `vit_wrapper.py` | 可以在 `blocks[:ell]` 后 reduce，再跑 `blocks[ell:]` |
+| LLaVA 13B POPE 对比实验 | 完成 | `run_llava13b_pope.py` | 跑 vanilla 和 early_semreduce，写 JSONL 和 summary |
+| LLaVA vision tower 内部第 ell 层插入 | 未完成 | 无 | 当前 HF LLaVA runner 在 image features 产出后压缩，不是在 vision tower block 内部压缩 |
+
+因此，如果问题是：
+
+```text
+你有没有完成 Early-SemReduce 的核心算法 reducer？
+```
+
+答案是完成了。
+
+如果问题是：
+
+```text
+你有没有在 LLaVA 13B 的 vision tower 中间层真正插入，节省 vision tower 后半段计算？
+```
+
+答案是当前 runner 没有做到这一点。当前 LLaVA 代码做的是：
+
+```text
+vision tower + projector 已经产生 image features
+然后 Early-SemReduce 压缩 image features
+然后 LLM 接收更少 image tokens
+```
+
+所以它能用于 POPE 上比较视觉 token reduction 对 yes/no、hallucination 和 image
+token 数的影响，但不能声称已经在 Hugging Face LLaVA 里完成了 vision tower
+内部 block-level early reduction。真正 block-level early reduction 的模板在
+`vit_wrapper.py` 里已经写好，适用于 timm 风格 ViT。
+
+### 0.2 代码里每个超参数具体是多少
+
+下面这张表是当前代码和我之前跑 POPE adversarial 100 条时使用的具体值。你提到的
+TopK 就在这里：代码里的 TopK 的 K 是 `candidate_classes=64`。
+
+| 算法符号 / 概念 | 代码参数名 | 默认值 / 实验值 | 在哪里设置 | 具体含义 |
+| --- | --- | --- | --- | --- |
+| prototype token 数 `m` | `num_prototypes` / `--prototype-tokens` | `128` | `SemReduceConfig`、`run_llava13b_pope.py` | 把原始 image tokens 压到 128 个 prototype tokens |
+| TopK 的 K | `candidate_classes` / `--candidate-classes` | `64` | `SemReduceConfig`、`run_llava13b_pope.py` | 从 classifier / LM head 里选 top 64 个候选语义类别 |
+| anchor 数 `b` | `num_anchors` / `--semantic-anchors` | `8` | `SemReduceConfig`、`run_llava13b_pope.py` | 选 top 8 个 semantic importance 最高的 patch 直接保留 |
+| clustering 迭代轮数 `T` | `iterations` / `--cluster-iters` | `5` | `SemReduceConfig`、`run_llava13b_pope.py` | semantic assignment 和 center update 重复 5 轮 |
+| soft aggregation 温度 `tau` | `temperature` / `--temperature` | `0.07` | `SemReduceConfig`、`run_llava13b_pope.py` | cluster 内 softmax pooling 的温度 |
+| 聚合 importance 权重 | `lambda_importance` / `--lambda-importance` | `0.25` | `SemReduceConfig`、`run_llava13b_pope.py` | 最终 prototype 聚合时 importance 的权重 |
+| 初始化 diversity 权重 | `lambda_diversity` / `--lambda-diversity` | `1.0` | `SemReduceConfig`、`run_llava13b_pope.py` | 初始化 centers 时 semantic diversity 的权重 |
+| center update importance 强度 | `gamma` / `--gamma` | `1.0` | `SemReduceConfig`、`run_llava13b_pope.py` | 更新 cluster center 时 `exp(gamma * importance)` 的 gamma |
+| 数值稳定项 | `eps` | `1e-6` | `SemReduceConfig` | response 标准化、L2 normalize、importance 标准化里的 epsilon |
+| 是否按位置排序 | `sort_by_position` | `True` | `SemReduceConfig` | 生成 prototype 后按 soft position 做 raster order 排序 |
+| LLaVA 实验样本数 | `--limit` | `100` | `run_llava13b_pope.py` 命令行 | POPE adversarial 跑 100 条 |
+| POPE 类别 | `--category` | `adversarial` | `run_llava13b_pope.py` 命令行 | 使用 POPE adversarial split/category |
+| LLaVA 模型 | `--model-id` | `llava-hf/llava-1.5-13b-hf` | 命令行 | 使用 LLaVA 1.5 13B |
+| 是否 4bit 加载 | `--load-in-4bit` | 开启 | 命令行 | 服务器实验里用 4bit 省显存 |
+
+对应到我之前服务器上跑 POPE adversarial 100 条的命令，关键超参数是：
+
+```bash
+--prototype-tokens 128
+--candidate-classes 64
+--semantic-anchors 8
+--cluster-iters 5
+--temperature 0.07
+--lambda-importance 0.25
+--lambda-diversity 1.0
+--gamma 1.0
+```
+
+也就是说：
+
+```text
+TopK 中的 K = 64
+TopB semantic anchors 中的 B = 8
+最终 prototype tokens m = 128
+clustering iterations T = 5
+softmax temperature tau = 0.07
+lambda_importance = 0.25
+lambda_diversity = 1.0
+gamma = 1.0
+eps = 1e-6
+sort_by_position = True
+```
+
+### 0.3 这些超参数在代码中的精确来源
+
+核心默认值来自 `SemReduceConfig`：
+
+```python
+@dataclass(frozen=True)
+class SemReduceConfig:
+    num_prototypes: int
+    candidate_classes: int | None = 64
+    num_anchors: int = 8
+    iterations: int = 5
+    temperature: float = 0.07
+    lambda_importance: float = 0.25
+    lambda_diversity: float = 1.0
+    gamma: float = 1.0
+    eps: float = 1e-6
+    sort_by_position: bool = True
+```
+
+LLaVA runner 的命令行默认值来自 `parse_args()`：
+
+```python
+parser.add_argument("--prototype-tokens", type=int, default=128)
+parser.add_argument("--candidate-classes", type=int, default=64)
+parser.add_argument("--semantic-anchors", type=int, default=8)
+parser.add_argument("--cluster-iters", type=int, default=5)
+parser.add_argument("--temperature", type=float, default=0.07)
+parser.add_argument("--lambda-importance", type=float, default=0.25)
+parser.add_argument("--lambda-diversity", type=float, default=1.0)
+parser.add_argument("--gamma", type=float, default=1.0)
+```
+
+然后在 `LlavaRunner.__init__` 里写进 config：
+
+```python
+self.semreduce_config = SemReduceConfig(
+    num_prototypes=prototype_tokens,
+    candidate_classes=candidate_classes,
+    num_anchors=semantic_anchors,
+    iterations=cluster_iters,
+    temperature=temperature,
+    lambda_importance=lambda_importance,
+    lambda_diversity=lambda_diversity,
+    gamma=gamma,
+)
+```
+
+### 0.4 TopK 在代码里到底做了什么
+
+以你提到的 TopK 为例，代码里不是抽象地写“选 topK”，而是具体做：
+
+```python
+selected = torch.topk(logits, k=max(1, int(candidate_classes)), dim=-1).indices
+```
+
+当前 `candidate_classes=64`，所以就是：
+
+```text
+selected = torch.topk(logits, k=64).indices
+```
+
+这里的 `logits` 来自：
+
+```python
+logits = norm_cls @ classifier_weight.T
+```
+
+LLaVA runner 里因为没有显式视觉分类头，所以 `classifier_weight` 来自：
+
+```python
+self.model.get_output_embeddings().weight
+```
+
+如果 output embedding 的 hidden dim 不匹配，就 fallback 到：
+
+```python
+self.model.get_input_embeddings().weight
+```
+
+因此在 LLaVA 13B 实验里，TopK 的含义是：
+
+```text
+用当前 image features 的 mean token 作为 surrogate CLS，
+投影到 LLaVA 语言 embedding / LM head 空间，
+从 vocabulary rows 里选响应最高的 64 个 semantic rows，
+再用这 64 个 rows 计算每个 patch 的 semantic response vector。
+```
+
+如果换成标准 ViT 分类模型，则 TopK 的含义是：
+
+```text
+用 CLS token 投影到 model.head.weight，
+从 ImageNet 或对应分类头的类别 rows 里选 top 64 个类别。
+```
+
+---
+
 ## 1. 实现整体分层
 
 代码可以分成四层：
