@@ -376,9 +376,10 @@ class LlavaMMERunner:
         return self._reduce_image_features(features)
 
     def _call_get_image_features(self, inputs: dict[str, torch.Tensor]) -> Any:
-        if not hasattr(self.model, "get_image_features"):
+        image_feature_modules = self._image_feature_modules()
+        if not image_feature_modules:
             raise ValueError("This runner expects the model to expose get_image_features")
-        method = self.model.get_image_features
+        method = image_feature_modules[-1].get_image_features
         signature = inspect.signature(method)
         kwargs: dict[str, Any] = {}
         for name in signature.parameters:
@@ -399,16 +400,27 @@ class LlavaMMERunner:
 
     @contextmanager
     def _precomputed_image_features_context(self, precomputed_features: Any):
-        original = self.model.get_image_features
+        modules = self._image_feature_modules()
+        patched: list[tuple[Any, Any]] = []
 
         def patched_get_image_features(*args: Any, **kwargs: Any) -> Any:
             return precomputed_features
 
-        self.model.get_image_features = patched_get_image_features
+        for module in modules:
+            patched.append((module, module.get_image_features))
+            module.get_image_features = patched_get_image_features
         try:
             yield
         finally:
-            self.model.get_image_features = original
+            for module, original in patched:
+                module.get_image_features = original
+
+    def _image_feature_modules(self) -> list[Any]:
+        modules = []
+        for candidate in (self.model, getattr(self.model, "model", None)):
+            if candidate is not None and hasattr(candidate, "get_image_features"):
+                modules.append(candidate)
+        return modules
 
     def _reduce_image_features(self, features: Any) -> Any:
         if torch.is_tensor(features):
