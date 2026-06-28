@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import inspect
 import json
 import random
-import re
 from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,14 +13,8 @@ from time import perf_counter
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
-from early_semreduce import (
-    AnswerAdaptiveKSemReduceConfig,
-    KSemReduceConfig,
-    answer_adaptive_k_semreduce,
-    k_semreduce,
-)
+from k_semreduce import KSemReduceConfig, k_semreduce
 
 
 PERCEPTION_CATEGORIES = {
@@ -42,183 +36,6 @@ COGNITION_CATEGORIES = {
     "code_reasoning",
 }
 
-STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "been",
-    "being",
-    "by",
-    "can",
-    "could",
-    "do",
-    "does",
-    "for",
-    "from",
-    "has",
-    "have",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "of",
-    "on",
-    "or",
-    "please",
-    "shown",
-    "the",
-    "there",
-    "this",
-    "to",
-    "was",
-    "were",
-    "what",
-    "which",
-    "will",
-    "with",
-    "yes",
-    "no",
-    "answer",
-    "picture",
-    "image",
-}
-
-RELATION_PHRASES = [
-    "above",
-    "behind",
-    "below",
-    "beside",
-    "between",
-    "holding",
-    "inside",
-    "near",
-    "next to",
-    "on top of",
-    "under",
-    "wearing",
-]
-
-COLORS = [
-    "black",
-    "blue",
-    "brown",
-    "gray",
-    "green",
-    "orange",
-    "pink",
-    "purple",
-    "red",
-    "white",
-    "yellow",
-]
-
-KNOWN_VISUAL_PHRASES = [
-    "baseball bat",
-    "baseball glove",
-    "cell phone",
-    "dining table",
-    "fire hydrant",
-    "hot dog",
-    "parking meter",
-    "sports ball",
-    "stop sign",
-    "tennis racket",
-    "traffic light",
-    "wine glass",
-]
-
-SEMANTIC_VOCABULARY = [
-    "person",
-    "people",
-    "man",
-    "woman",
-    "child",
-    "face",
-    "head",
-    "hand",
-    "body",
-    "animal",
-    "dog",
-    "cat",
-    "bird",
-    "horse",
-    "sheep",
-    "cow",
-    "car",
-    "bus",
-    "truck",
-    "train",
-    "bicycle",
-    "motorcycle",
-    "airplane",
-    "boat",
-    "table",
-    "chair",
-    "sofa",
-    "bed",
-    "screen",
-    "computer",
-    "phone",
-    "book",
-    "cup",
-    "bottle",
-    "bowl",
-    "plate",
-    "food",
-    "fruit",
-    "apple",
-    "banana",
-    "umbrella",
-    "bag",
-    "clock",
-    "text",
-    "word",
-    "letter",
-    "number",
-    "sign",
-    "poster",
-    "code",
-    "python",
-    "program",
-    "output",
-    "painting",
-    "artwork",
-    "landmark",
-    "building",
-    "street",
-    "room",
-    "scene",
-    "color",
-    "position",
-    "count",
-    "near relation",
-    "holding relation",
-    "wearing relation",
-    "inside relation",
-]
-
-CATEGORY_HINTS = {
-    "OCR": ["text", "word", "letter", "number", "sign"],
-    "artwork": ["artwork", "painting", "picture", "style"],
-    "celebrity": ["person", "face", "celebrity"],
-    "code_reasoning": ["code", "python", "program", "output", "number"],
-    "color": ["color"],
-    "commonsense_reasoning": ["object", "scene", "relation"],
-    "count": ["count", "number", "object"],
-    "existence": ["object", "presence"],
-    "landmark": ["landmark", "building", "place"],
-    "numerical_calculation": ["number", "calculation", "text"],
-    "position": ["position", "relation", "location"],
-    "posters": ["poster", "text", "image"],
-    "scene": ["scene", "place", "background"],
-    "text_translation": ["text", "word", "translation", "language"],
-}
-
 
 @dataclass(frozen=True)
 class MMEExample:
@@ -233,17 +50,17 @@ class MMEExample:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Evaluate vanilla LLaVA 13B and Answer-Adaptive K-SemReduce on MME."
+        description="Evaluate vanilla LLaVA-1.5-13B and K-SemReduce on MME."
     )
     parser.add_argument("--model-id", default="llava-hf/llava-1.5-13b-hf")
     parser.add_argument("--dataset-name", default="lmms-lab/MME")
     parser.add_argument("--split", default="test")
-    parser.add_argument("--methods", default="vanilla,answer_adaptive_k_semreduce")
+    parser.add_argument("--methods", default="vanilla,k_semreduce")
     parser.add_argument("--limit-images", type=int, default=300)
     parser.add_argument("--category", default="")
     parser.add_argument("--sampling", choices=["stratified", "shuffle", "first"], default="stratified")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output-dir", default="results/llava13b_answer_adaptive_k_semreduce_mme300")
+    parser.add_argument("--output-dir", default="results/llava13b_k_semreduce_mme300_k64")
     parser.add_argument("--device-map", default="auto")
     parser.add_argument(
         "--dtype",
@@ -252,15 +69,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--candidate-classes", type=int, default=64)
-    parser.add_argument("--k-cluster-iters", type=int, default=3)
-    parser.add_argument("--k-temperature", type=float, default=0.1)
-    parser.add_argument("--k-lambda-importance", type=float, default=0.25)
-    parser.add_argument("--k-gamma", type=float, default=1.0)
-    parser.add_argument("--adaptive-cluster-iters", type=int, default=3)
-    parser.add_argument("--adaptive-temperature", type=float, default=0.1)
-    parser.add_argument("--adaptive-lambda-importance", type=float, default=0.25)
-    parser.add_argument("--adaptive-gamma", type=float, default=1.0)
-    parser.add_argument("--adaptive-hypothesis-multiplier", type=int, default=1)
+    parser.add_argument("--cluster-iters", type=int, default=3)
+    parser.add_argument("--temperature", type=float, default=0.1)
+    parser.add_argument("--lambda-importance", type=float, default=0.25)
+    parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--load-in-4bit", action="store_true")
     return parser.parse_args()
 
@@ -268,7 +80,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     methods = [method.strip() for method in args.methods.split(",") if method.strip()]
-    known_methods = {"vanilla", "k_semreduce", "answer_adaptive_k_semreduce"}
+    known_methods = {"vanilla", "k_semreduce"}
     unknown = [method for method in methods if method not in known_methods]
     if unknown:
         raise SystemExit(f"Unknown methods: {', '.join(unknown)}")
@@ -296,15 +108,10 @@ def main() -> None:
         max_new_tokens=args.max_new_tokens,
         load_in_4bit=args.load_in_4bit,
         candidate_classes=args.candidate_classes,
-        k_cluster_iters=args.k_cluster_iters,
-        k_temperature=args.k_temperature,
-        k_lambda_importance=args.k_lambda_importance,
-        k_gamma=args.k_gamma,
-        adaptive_cluster_iters=args.adaptive_cluster_iters,
-        adaptive_temperature=args.adaptive_temperature,
-        adaptive_lambda_importance=args.adaptive_lambda_importance,
-        adaptive_gamma=args.adaptive_gamma,
-        adaptive_hypothesis_multiplier=args.adaptive_hypothesis_multiplier,
+        cluster_iters=args.cluster_iters,
+        temperature=args.temperature,
+        lambda_importance=args.lambda_importance,
+        gamma=args.gamma,
     )
     print("[MME] Model ready. Running methods:", ", ".join(methods))
 
@@ -328,7 +135,6 @@ def main() -> None:
                     image=example.image,
                     question=example.question,
                     method=method,
-                    category=example.category,
                 )
                 elapsed = perf_counter() - method_start
                 record = {
@@ -350,7 +156,7 @@ def main() -> None:
                 writers[method].write(json.dumps(record, ensure_ascii=False) + "\n")
                 writers[method].flush()
                 print(
-                    f"  - {method:<30} pred={record['prediction']:<3} "
+                    f"  - {method:<15} pred={record['prediction']:<3} "
                     f"conf={record['confidence']:.3f} correct={record['correct']} "
                     f"time={elapsed:.1f}s"
                 )
@@ -381,17 +187,13 @@ def main() -> None:
         "sampling": args.sampling,
         "seed": args.seed,
         "methods": methods,
-        "candidate_classes": args.candidate_classes,
-        "k_cluster_iters": args.k_cluster_iters,
-        "k_temperature": args.k_temperature,
-        "k_lambda_importance": args.k_lambda_importance,
-        "k_gamma": args.k_gamma,
-        "adaptive_cluster_iters": args.adaptive_cluster_iters,
-        "adaptive_temperature": args.adaptive_temperature,
-        "adaptive_lambda_importance": args.adaptive_lambda_importance,
-        "adaptive_gamma": args.adaptive_gamma,
-        "adaptive_hypothesis_multiplier": args.adaptive_hypothesis_multiplier,
+        "candidate_classes_K": args.candidate_classes,
+        "cluster_iters": args.cluster_iters,
+        "temperature": args.temperature,
+        "lambda_importance": args.lambda_importance,
+        "gamma": args.gamma,
         "load_in_4bit": args.load_in_4bit,
+        "reduction_stage": "after_vision_tower_and_projector",
         "elapsed_sec": perf_counter() - start,
     }
     (output_dir / "summary.json").write_text(
@@ -416,15 +218,10 @@ class LlavaMMERunner:
         max_new_tokens: int,
         load_in_4bit: bool,
         candidate_classes: int,
-        k_cluster_iters: int,
-        k_temperature: float,
-        k_lambda_importance: float,
-        k_gamma: float,
-        adaptive_cluster_iters: int,
-        adaptive_temperature: float,
-        adaptive_lambda_importance: float,
-        adaptive_gamma: float,
-        adaptive_hypothesis_multiplier: int,
+        cluster_iters: int,
+        temperature: float,
+        lambda_importance: float,
+        gamma: float,
     ) -> None:
         from transformers import AutoProcessor, LlavaForConditionalGeneration
 
@@ -449,18 +246,11 @@ class LlavaMMERunner:
         self.max_new_tokens = max_new_tokens
         self.k_config = KSemReduceConfig(
             num_semantic_classes=candidate_classes,
-            iterations=k_cluster_iters,
-            temperature=k_temperature,
-            lambda_importance=k_lambda_importance,
-            gamma=k_gamma,
+            iterations=cluster_iters,
+            temperature=temperature,
+            lambda_importance=lambda_importance,
+            gamma=gamma,
         )
-        self.adaptive_config = AnswerAdaptiveKSemReduceConfig(
-            iterations=adaptive_cluster_iters,
-            temperature=adaptive_temperature,
-            lambda_importance=adaptive_lambda_importance,
-            gamma=adaptive_gamma,
-        )
-        self.adaptive_hypothesis_multiplier = max(1, int(adaptive_hypothesis_multiplier))
         self.image_token_id = self._image_token_id()
         self.pad_token_id = self.tokenizer.pad_token_id
         if self.pad_token_id is None:
@@ -468,18 +258,16 @@ class LlavaMMERunner:
         self.yes_token_ids = self._candidate_first_token_ids(["yes", "Yes", " yes", " Yes"])
         self.no_token_ids = self._candidate_first_token_ids(["no", "No", " no", " No"])
         self._classifier_cache: dict[tuple[str, int], torch.Tensor] = {}
-        self._embedding_cache: dict[tuple[str, int], torch.Tensor] = {}
-        self._semantic_vocab_cache: dict[tuple[str, int], tuple[list[str], torch.Tensor]] = {}
         self._last_reduction_meta: dict[str, Any] = {}
 
-    def ask_yes_no(self, image: Any, question: str, method: str, category: str) -> dict[str, Any]:
+    def ask_yes_no(self, image: Any, question: str, method: str) -> dict[str, Any]:
         prompt = build_prompt(self.processor, question)
         inputs = self.processor(images=image, text=prompt, return_tensors="pt")
         inputs = move_inputs_to_model(inputs, self.model)
         self._last_reduction_meta = {}
 
-        if method in {"k_semreduce", "answer_adaptive_k_semreduce"}:
-            reduced_features = self._precompute_dynamic_image_features(inputs, method, question, category)
+        if method == "k_semreduce":
+            reduced_features = self._precompute_dynamic_image_features(inputs)
             dynamic_tokens = image_feature_count(reduced_features)
             inputs = force_image_placeholder_count(
                 inputs,
@@ -488,8 +276,10 @@ class LlavaMMERunner:
                 pad_token_id=int(self.pad_token_id),
             )
             context = self._precomputed_image_features_context(reduced_features)
-        else:
+        elif method == "vanilla":
             context = nullcontext()
+        else:
+            raise ValueError(f"Unsupported method: {method}")
 
         with context:
             confidence = self._yes_no_confidence(inputs)
@@ -520,17 +310,7 @@ class LlavaMMERunner:
                     "temperature": self.k_config.temperature,
                     "lambda_importance": self.k_config.lambda_importance,
                     "gamma": self.k_config.gamma,
-                    **self._last_reduction_meta,
-                }
-            )
-        elif method == "answer_adaptive_k_semreduce":
-            meta.update(
-                {
-                    "adaptive_hypothesis_multiplier": self.adaptive_hypothesis_multiplier,
-                    "cluster_iters": self.adaptive_config.iterations,
-                    "temperature": self.adaptive_config.temperature,
-                    "lambda_importance": self.adaptive_config.lambda_importance,
-                    "gamma": self.adaptive_config.gamma,
+                    "reduction_stage": "after_vision_tower_and_projector",
                     **self._last_reduction_meta,
                 }
             )
@@ -589,213 +369,78 @@ class LlavaMMERunner:
                 cached = weight.detach().to(device=device, dtype=torch.float32)
                 self._classifier_cache[cache_key] = cached
                 return cached
-        raise ValueError(f"No frozen language head matches image feature dim {hidden_dim}")
+        raise ValueError(f"No frozen semantic head matches image feature dim {hidden_dim}")
 
-    def _input_embedding_weight_for(self, device: torch.device, hidden_dim: int) -> torch.Tensor:
-        cache_key = (str(device), int(hidden_dim))
-        if cache_key in self._embedding_cache:
-            return self._embedding_cache[cache_key]
-        candidates = []
-        input_embeddings = self.model.get_input_embeddings()
-        output_embeddings = self.model.get_output_embeddings()
-        if input_embeddings is not None and hasattr(input_embeddings, "weight"):
-            candidates.append(input_embeddings.weight)
-        if output_embeddings is not None and hasattr(output_embeddings, "weight"):
-            candidates.append(output_embeddings.weight)
-        for weight in candidates:
-            if int(weight.shape[-1]) == int(hidden_dim):
-                cached = weight.detach().to(device=device, dtype=torch.float32)
-                self._embedding_cache[cache_key] = cached
-                return cached
-        raise ValueError(f"No frozen token embedding matches image feature dim {hidden_dim}")
+    def _precompute_dynamic_image_features(self, inputs: dict[str, torch.Tensor]) -> Any:
+        features = self._call_get_image_features(inputs)
+        return self._reduce_image_features(features)
 
-    def _get_image_feature_model(self) -> Any:
-        if hasattr(self.model, "get_image_features"):
-            return self.model
-        inner_model = getattr(self.model, "model", None)
-        if inner_model is not None and hasattr(inner_model, "get_image_features"):
-            return inner_model
-        raise ValueError("Loaded LLaVA model does not expose get_image_features")
-
-    def _image_feature_kwargs(self, inputs: dict[str, torch.Tensor]) -> dict[str, Any]:
-        if "pixel_values" not in inputs:
-            raise ValueError("LLaVA inputs do not contain pixel_values")
-        kwargs: dict[str, Any] = {"pixel_values": inputs["pixel_values"]}
-        config = getattr(self.model, "config", None)
-        if config is not None:
-            if hasattr(config, "vision_feature_layer"):
-                kwargs["vision_feature_layer"] = getattr(config, "vision_feature_layer")
-            if hasattr(config, "vision_feature_select_strategy"):
-                kwargs["vision_feature_select_strategy"] = getattr(
-                    config,
-                    "vision_feature_select_strategy",
-                )
-        if "image_sizes" in inputs:
-            kwargs["image_sizes"] = inputs["image_sizes"]
-        return kwargs
-
-    def _precompute_dynamic_image_features(
-        self,
-        inputs: dict[str, torch.Tensor],
-        method: str,
-        question: str,
-        category: str,
-    ) -> Any:
-        feature_model = self._get_image_feature_model()
-        with torch.inference_mode():
-            original_features = feature_model.get_image_features(**self._image_feature_kwargs(inputs))
-        return self._reduce_image_features(original_features, method, question, category)
+    def _call_get_image_features(self, inputs: dict[str, torch.Tensor]) -> Any:
+        if not hasattr(self.model, "get_image_features"):
+            raise ValueError("This runner expects the model to expose get_image_features")
+        method = self.model.get_image_features
+        signature = inspect.signature(method)
+        kwargs: dict[str, Any] = {}
+        for name in signature.parameters:
+            if name == "pixel_values" and "pixel_values" in inputs:
+                kwargs[name] = inputs["pixel_values"]
+            elif name == "vision_feature_layer":
+                kwargs[name] = getattr(self.model.config, "vision_feature_layer", -2)
+            elif name == "vision_feature_select_strategy":
+                kwargs[name] = getattr(self.model.config, "vision_feature_select_strategy", "default")
+            elif name == "image_sizes" and "image_sizes" in inputs:
+                kwargs[name] = inputs["image_sizes"]
+        try:
+            with torch.inference_mode():
+                return method(**kwargs)
+        except TypeError:
+            with torch.inference_mode():
+                return method(inputs["pixel_values"])
 
     @contextmanager
-    def _precomputed_image_features_context(self, reduced_features: Any):
-        patched = []
-        candidates = [self.model]
-        inner_model = getattr(self.model, "model", None)
-        if inner_model is not None:
-            candidates.append(inner_model)
+    def _precomputed_image_features_context(self, precomputed_features: Any):
+        original = self.model.get_image_features
 
-        def wrapped_get_image_features(*args, **kwargs):
-            del args, kwargs
-            return reduced_features
+        def patched_get_image_features(*args: Any, **kwargs: Any) -> Any:
+            return precomputed_features
 
-        for candidate in candidates:
-            if not hasattr(candidate, "get_image_features"):
-                continue
-            original = candidate.get_image_features
-            candidate.get_image_features = wrapped_get_image_features
-            patched.append((candidate, original))
+        self.model.get_image_features = patched_get_image_features
         try:
             yield
         finally:
-            for candidate, original in patched:
-                candidate.get_image_features = original
+            self.model.get_image_features = original
 
-    def _reduce_image_features(self, features: Any, method: str, question: str, category: str) -> Any:
+    def _reduce_image_features(self, features: Any) -> Any:
         if torch.is_tensor(features):
             if features.ndim in {2, 3}:
                 original_tokens = int(features.shape[-2])
-                base_hypothesis_count = 0
-                if method == "k_semreduce":
-                    classifier = self._semantic_classifier_for(features.device, int(features.shape[-1]))
-                    result = k_semreduce(
-                        patch_tokens=features,
-                        classifier=classifier,
-                        config=self.k_config,
-                    )
-                    hypotheses: list[str] = []
-                    requested = self.k_config.num_semantic_classes
-                elif method == "answer_adaptive_k_semreduce":
-                    semantic_head, hypotheses, base_hypothesis_count = self._answer_adaptive_semantic_head(
-                        features,
-                        question,
-                        category,
-                    )
-                    result = answer_adaptive_k_semreduce(
-                        patch_tokens=features,
-                        hypothesis_embeddings=semantic_head,
-                        config=self.adaptive_config,
-                    )
-                    requested = len(hypotheses)
-                else:
-                    raise ValueError(f"Unsupported reduction method: {method}")
-
-                selected_indices = result.selected_classes
-                if selected_indices.ndim > 1:
-                    selected_indices = selected_indices[0]
-                selected = [
-                    hypotheses[int(index)]
-                    for index in selected_indices.tolist()
-                    if hypotheses and int(index) < len(hypotheses)
-                ]
+                hidden_dim = int(features.shape[-1])
+                classifier = self._semantic_classifier_for(features.device, hidden_dim)
+                result = k_semreduce(
+                    patch_tokens=features,
+                    classifier=classifier,
+                    config=self.k_config,
+                )
                 self._last_reduction_meta = {
                     "original_image_tokens": original_tokens,
                     "reduced_image_tokens": int(result.patch_tokens.shape[-2]),
-                    "base_hypothesis_count": int(base_hypothesis_count)
-                    if method == "answer_adaptive_k_semreduce"
-                    else 0,
-                    "hypothesis_multiplier": int(self.adaptive_hypothesis_multiplier)
-                    if method == "answer_adaptive_k_semreduce"
-                    else 0,
-                    "requested_hypothesis_count": int(requested),
-                    "selected_hypothesis_count": int(result.patch_tokens.shape[-2]),
-                    "hypotheses": hypotheses,
-                    "selected_hypotheses": selected,
+                    "requested_k": int(result.requested_k),
+                    "actual_k": int(result.actual_k),
+                    "selected_class_count": int(result.selected_classes.numel()),
                     "mean_region_mass": float(result.masses.float().mean().item()),
                     "max_region_mass": int(result.masses.max().item()),
                     "min_region_mass": int(result.masses.min().item()),
-                    "dynamic_token_count": True,
-                    "reduction_stage": "image_feature_level_after_vision_tower_and_projector",
                 }
                 return result.patch_tokens
             return features
         if hasattr(features, "pooler_output"):
-            features.pooler_output = self._reduce_image_features(features.pooler_output, method, question, category)
+            features.pooler_output = self._reduce_image_features(features.pooler_output)
             return features
         if isinstance(features, list):
-            return [self._reduce_image_features(item, method, question, category) for item in features]
+            return [self._reduce_image_features(item) for item in features]
         if isinstance(features, tuple):
-            return tuple(self._reduce_image_features(item, method, question, category) for item in features)
+            return tuple(self._reduce_image_features(item) for item in features)
         return features
-
-    def _answer_adaptive_semantic_head(
-        self,
-        features: torch.Tensor,
-        question: str,
-        category: str,
-    ) -> tuple[torch.Tensor, list[str], int]:
-        hidden_dim = int(features.shape[-1])
-        device = features.device
-
-        base = extract_question_hypotheses(question, category)
-        hypotheses = expand_hypotheses(base, self.adaptive_hypothesis_multiplier)
-        embeddings = torch.stack(
-            [self._phrase_embedding(label, device, hidden_dim) for label in hypotheses],
-            dim=0,
-        )
-        return embeddings, hypotheses, len(dedupe_preserve_order(base))
-
-    def _top_visual_vocabulary(
-        self,
-        global_token: torch.Tensor,
-        device: torch.device,
-        hidden_dim: int,
-    ) -> list[str]:
-        labels, embeddings = self._semantic_vocabulary_embeddings(device, hidden_dim)
-        norm_global = F.layer_norm(global_token.float().unsqueeze(0), global_token.shape[-1:]).squeeze(0)
-        scores = norm_global @ embeddings.T
-        order = torch.argsort(scores, descending=True)
-        return [labels[int(index)] for index in order.tolist()]
-
-    def _semantic_vocabulary_embeddings(
-        self,
-        device: torch.device,
-        hidden_dim: int,
-    ) -> tuple[list[str], torch.Tensor]:
-        cache_key = (str(device), int(hidden_dim))
-        if cache_key in self._semantic_vocab_cache:
-            return self._semantic_vocab_cache[cache_key]
-        labels = dedupe_preserve_order(SEMANTIC_VOCABULARY + COLORS + KNOWN_VISUAL_PHRASES)
-        embeddings = torch.stack(
-            [self._phrase_embedding(label, device, hidden_dim) for label in labels],
-            dim=0,
-        )
-        self._semantic_vocab_cache[cache_key] = (labels, embeddings)
-        return labels, embeddings
-
-    def _phrase_embedding(self, phrase: str, device: torch.device, hidden_dim: int) -> torch.Tensor:
-        weight = self._input_embedding_weight_for(device, hidden_dim)
-        ids = self.tokenizer.encode(" " + phrase, add_special_tokens=False)
-        ids = [token_id for token_id in ids if 0 <= int(token_id) < int(weight.shape[0])]
-        if not ids:
-            ids = self.tokenizer.encode(phrase, add_special_tokens=False)
-            ids = [token_id for token_id in ids if 0 <= int(token_id) < int(weight.shape[0])]
-        if not ids:
-            vector = torch.zeros(hidden_dim, device=device, dtype=torch.float32)
-            vector[0] = 1.0
-            return vector
-        index = torch.tensor(ids, dtype=torch.long, device=device)
-        vector = weight[index].mean(dim=0)
-        return F.normalize(vector.float(), p=2, dim=0)
 
 
 def load_mme_examples(
@@ -814,7 +459,7 @@ def load_mme_examples(
         row_category = str(row["category"])
         if category and row_category.lower() != category.lower():
             continue
-        image_id = str(row["question_id"])
+        image_id = str(row.get("image_id", row.get("question_id", index)))
         grouped.setdefault(image_id, []).append((index, row))
 
     selected_ids = select_image_ids(grouped, limit_images, seed, sampling)
@@ -825,7 +470,7 @@ def load_mme_examples(
             examples.append(
                 MMEExample(
                     image_id=image_id,
-                    question_id=str(row["question_id"]),
+                    question_id=str(row.get("question_id", image_id)),
                     question=str(row["question"]),
                     label=normalize_label(row["answer"]),
                     image=row["image"],
@@ -869,81 +514,6 @@ def select_image_ids(
                 if len(selected) >= limit_images:
                     break
     return selected
-
-
-def extract_question_hypotheses(question: str, category: str) -> list[str]:
-    text = question.lower()
-    cleaned = re.sub(r"please answer yes or no\.?", " ", text)
-    concepts: list[str] = []
-    concepts.extend(CATEGORY_HINTS.get(category, []))
-    concepts.extend(CATEGORY_HINTS.get(category.lower(), []))
-
-    for phrase in KNOWN_VISUAL_PHRASES:
-        if phrase in cleaned:
-            concepts.append(phrase)
-    for phrase in RELATION_PHRASES:
-        if phrase in cleaned:
-            concepts.append(f"{phrase} relation")
-    for color in COLORS:
-        if re.search(rf"\b{re.escape(color)}\b", cleaned):
-            concepts.append(color)
-            concepts.append(f"{color} object")
-
-    for quoted in re.findall(r"'([^']+)'|\"([^\"]+)\"", question):
-        value = next((part for part in quoted if part), "").strip().lower()
-        if value and value not in {"yes", "no"}:
-            concepts.append(value[:48])
-
-    for token in re.findall(r"[a-z0-9]+", cleaned):
-        if token in STOPWORDS:
-            continue
-        if len(token) < 3 and not token.isdigit():
-            continue
-        concepts.append(singularize(token))
-    if not concepts:
-        concepts.extend(["object", "scene", "visual evidence"])
-    return dedupe_preserve_order(concepts)
-
-
-def expand_hypotheses(base: list[str], multiplier: int) -> list[str]:
-    base_hypotheses = dedupe_preserve_order(base)
-    if not base_hypotheses:
-        base_hypotheses = ["object", "scene", "visual evidence"]
-
-    multiplier = max(1, int(multiplier))
-    templates = [
-        "{label}",
-        "visual evidence of {label}",
-        "detailed {label} region",
-    ]
-    while len(templates) < multiplier:
-        templates.append(f"supporting visual cue {len(templates) + 1} for {{label}}")
-
-    expanded: list[str] = []
-    for template in templates[:multiplier]:
-        for label in base_hypotheses:
-            expanded.append(template.format(label=label))
-    return expanded
-
-
-def dedupe_preserve_order(values: list[str]) -> list[str]:
-    seen = set()
-    result = []
-    for value in values:
-        normalized = " ".join(str(value).strip().lower().split())
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        result.append(normalized)
-    return result
-
-
-def singularize(token: str) -> str:
-    if len(token) > 4 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token
 
 
 def category_dimension(category: str) -> str:
@@ -1055,13 +625,13 @@ def metric_row(method: str, name: str, metric: dict[str, Any]) -> list[Any]:
 
 def format_overall_table(summary: dict[str, Any], methods: list[str]) -> str:
     lines = [
-        "method                          q      img    acc     acc+    mme     yes",
-        "------------------------------  -----  -----  ------  ------  ------  ------",
+        "method           q      img    acc     acc+    mme     yes",
+        "---------------  -----  -----  ------  ------  ------  ------",
     ]
     for method in methods:
         metric = summary[method]["overall"]
         lines.append(
-            f"{method:<30}  {int(metric['total_questions']):>5}  "
+            f"{method:<15}  {int(metric['total_questions']):>5}  "
             f"{int(metric['total_images']):>5}  {metric['accuracy']:>6.3f}  "
             f"{metric['paired_accuracy']:>6.3f}  {metric['mme_score']:>6.1f}  "
             f"{metric['yes_ratio']:>6.3f}"
@@ -1071,13 +641,13 @@ def format_overall_table(summary: dict[str, Any], methods: list[str]) -> str:
 
 def format_dimension_table(summary: dict[str, Any], methods: list[str]) -> str:
     lines = [
-        "method                          dimension   q      img    acc     acc+    mme",
-        "------------------------------  ----------  -----  -----  ------  ------  ------",
+        "method           dimension   q      img    acc     acc+    mme",
+        "---------------  ----------  -----  -----  ------  ------  ------",
     ]
     for method in methods:
         for dimension, metric in summary[method]["dimensions"].items():
             lines.append(
-                f"{method:<30}  {dimension:<10}  {int(metric['total_questions']):>5}  "
+                f"{method:<15}  {dimension:<10}  {int(metric['total_questions']):>5}  "
                 f"{int(metric['total_images']):>5}  {metric['accuracy']:>6.3f}  "
                 f"{metric['paired_accuracy']:>6.3f}  {metric['mme_score']:>6.1f}"
             )
@@ -1178,7 +748,19 @@ def image_feature_count(features: Any) -> int:
     if hasattr(features, "pooler_output"):
         return image_feature_count(features.pooler_output)
     if isinstance(features, (list, tuple)):
-        return sum(image_feature_count(item) for item in features)
+        counts = [
+            image_feature_count(item)
+            for item in features
+            if torch.is_tensor(item) and item.ndim in {2, 3}
+        ]
+        if counts:
+            return sum(counts)
+        for item in features:
+            try:
+                return image_feature_count(item)
+            except ValueError:
+                continue
+        raise ValueError("Cannot infer image feature count from list/tuple features")
     raise ValueError(f"Cannot infer image feature count from {type(features)!r}")
 
 

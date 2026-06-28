@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -7,26 +8,17 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .reducer import (
-    SemReduceResult,
-    TokenNorm,
-    _classifier_weight,
-    _make_norm,
-    _position_order,
-    _prepare_positions,
-    _remap_assignments,
-    _semantic_response,
-    _stack_results,
-)
+
+TokenNorm = Callable[[torch.Tensor], torch.Tensor] | nn.Module | None
 
 
 @dataclass(frozen=True)
 class KSemReduceConfig:
     """Configuration for K-SemReduce.
 
-    ``num_semantic_classes`` is the single core control variable. It is used as
-    the Top-K candidate class count, semantic response dimension, cluster count,
-    and output prototype-token count.
+    ``num_semantic_classes`` is the single core control variable K. It is used
+    as the Top-K candidate semantic class count, semantic-response dimension,
+    cluster count, and output prototype-token count.
     """
 
     num_semantic_classes: int = 64
@@ -36,6 +28,22 @@ class KSemReduceConfig:
     gamma: float = 1.0
     eps: float = 1e-6
     sort_by_position: bool = True
+
+
+@dataclass
+class KSemReduceResult:
+    """Outputs and bookkeeping from K-SemReduce."""
+
+    patch_tokens: torch.Tensor
+    assignments: torch.Tensor
+    centers: torch.Tensor
+    selected_classes: torch.Tensor
+    seed_indices: torch.Tensor
+    masses: torch.Tensor
+    soft_positions: torch.Tensor | None
+    prototype_order: torch.Tensor
+    requested_k: int
+    actual_k: int
 
 
 class KSemReduce(nn.Module):
@@ -53,41 +61,12 @@ class KSemReduce(nn.Module):
 
     def forward(
         self,
-        sequence_tokens: torch.Tensor,
+        patch_tokens: torch.Tensor,
         classifier: torch.Tensor | nn.Module,
+        cls_token: torch.Tensor | None = None,
         positions: torch.Tensor | None = None,
-        cls_index: int = 0,
-    ) -> SemReduceResult:
-        if cls_index != 0:
-            raise ValueError("KSemReduce currently expects the CLS token at index 0")
-        if sequence_tokens.ndim == 2:
-            return self._forward_sequence_single(sequence_tokens, classifier, positions)
-        if sequence_tokens.ndim != 3:
-            raise ValueError(
-                "Expected sequence_tokens with shape [N + 1, D] or [B, N + 1, D], "
-                f"got {tuple(sequence_tokens.shape)}"
-            )
-
-        per_batch = []
-        for batch_index, batch_tokens in enumerate(sequence_tokens):
-            batch_positions = None if positions is None else positions[batch_index]
-            per_batch.append(self._forward_sequence_single(batch_tokens, classifier, batch_positions))
-        return _stack_results(per_batch, include_sequence=True)
-
-    def _forward_sequence_single(
-        self,
-        sequence_tokens: torch.Tensor,
-        classifier: torch.Tensor | nn.Module,
-        positions: torch.Tensor | None,
-    ) -> SemReduceResult:
-        if sequence_tokens.ndim != 2:
-            raise ValueError(f"Expected [N + 1, D] tokens, got {tuple(sequence_tokens.shape)}")
-        if sequence_tokens.shape[0] < 2:
-            raise ValueError("sequence_tokens must contain one CLS token and at least one patch token")
-
-        cls_token = sequence_tokens[0]
-        patch_tokens = sequence_tokens[1:]
-        reduced = k_semreduce(
+    ) -> KSemReduceResult:
+        return k_semreduce(
             patch_tokens=patch_tokens,
             classifier=classifier,
             cls_token=cls_token,
@@ -95,8 +74,6 @@ class KSemReduce(nn.Module):
             token_norm=self._norm,
             positions=positions,
         )
-        reduced.sequence = torch.cat([cls_token.unsqueeze(0), reduced.patch_tokens], dim=0)
-        return reduced
 
     def _norm(self, values: torch.Tensor) -> torch.Tensor:
         if self.token_norm is not None:
@@ -114,15 +91,27 @@ def k_semreduce(
     token_norm: TokenNorm = None,
     positions: torch.Tensor | None = None,
     **config_overrides: object,
-) -> SemReduceResult:
-    """Reduce patch tokens with K-SemReduce."""
+) -> KSemReduceResult:
+    """Reduce patch tokens with K-SemReduce.
 
-    cfg = _resolve_k_config(config, config_overrides)
+    Args:
+        patch_tokens: Tensor with shape ``[N, D]`` or ``[B, N, D]``.
+        classifier: Frozen classifier/surrogate semantic head with shape
+            ``[C, D]`` or an ``nn.Module`` exposing ``.weight``.
+        cls_token: Optional CLS/global token with shape ``[D]`` or ``[B, D]``.
+        config: K-SemReduce configuration.
+        token_norm: Optional normalization function. Defaults to LayerNorm.
+        positions: Optional patch positions with shape ``[N, 2]`` or
+            ``[B, N, 2]``.
+    """
+
+    cfg = _resolve_config(config, config_overrides)
+    _validate_config(cfg)
     if patch_tokens.ndim == 2:
         return _k_semreduce_single(patch_tokens, classifier, cls_token, cfg, token_norm, positions)
     if patch_tokens.ndim != 3:
         raise ValueError(
-            f"Expected patch_tokens with shape [N, D] or [B, N, D], got {tuple(patch_tokens.shape)}"
+            f"patch_tokens must have shape [N, D] or [B, N, D], got {tuple(patch_tokens.shape)}"
         )
 
     per_batch = []
@@ -139,7 +128,7 @@ def k_semreduce(
                 batch_positions,
             )
         )
-    return _stack_results(per_batch, include_sequence=False)
+    return _stack_results(per_batch)
 
 
 def _k_semreduce_single(
@@ -149,24 +138,24 @@ def _k_semreduce_single(
     cfg: KSemReduceConfig,
     token_norm: TokenNorm,
     positions: torch.Tensor | None,
-) -> SemReduceResult:
-    _validate_k_config(cfg)
+) -> KSemReduceResult:
     if patch_tokens.ndim != 2:
         raise ValueError(f"Expected [N, D] patch tokens, got {tuple(patch_tokens.shape)}")
-    if patch_tokens.shape[0] == 0:
+    if int(patch_tokens.shape[0]) == 0:
         raise ValueError("cannot reduce an empty patch-token sequence")
 
     num_patches = int(patch_tokens.shape[0])
+    requested_k = int(cfg.num_semantic_classes)
     norm_fn = _make_norm(token_norm)
     weight = _classifier_weight(classifier, patch_tokens.device)
-    target = min(int(cfg.num_semantic_classes), num_patches, int(weight.shape[0]))
+    actual_k = min(requested_k, num_patches, int(weight.shape[0]))
 
     q_tokens, p_hat, importance, selected_classes = _semantic_response(
         patch_tokens=patch_tokens,
         classifier_weight=weight,
         cls_token=cls_token,
         token_norm=norm_fn,
-        candidate_classes=target,
+        candidate_classes=actual_k,
         eps=cfg.eps,
     )
     seed_indices = _select_class_guided_seeds(p_hat)
@@ -180,7 +169,7 @@ def _k_semreduce_single(
         eps=cfg.eps,
     )
 
-    return _aggregate_k_prototypes(
+    return _aggregate_prototypes(
         patch_tokens=patch_tokens,
         q_tokens=q_tokens,
         importance=importance,
@@ -192,7 +181,37 @@ def _k_semreduce_single(
         temperature=cfg.temperature,
         lambda_importance=cfg.lambda_importance,
         sort_by_position=cfg.sort_by_position,
+        requested_k=requested_k,
+        actual_k=actual_k,
     )
+
+
+def _semantic_response(
+    patch_tokens: torch.Tensor,
+    classifier_weight: torch.Tensor,
+    cls_token: torch.Tensor | None,
+    token_norm: Callable[[torch.Tensor], torch.Tensor],
+    candidate_classes: int,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if cls_token is None:
+        cls_token = patch_tokens.mean(dim=0)
+
+    norm_cls = token_norm(cls_token.unsqueeze(0)).to(dtype=torch.float32).squeeze(0)
+    logits = norm_cls @ classifier_weight.T
+    selected = torch.topk(logits, k=max(1, int(candidate_classes)), dim=-1).indices
+    selected_weight = classifier_weight[selected]
+
+    norm_patch = token_norm(patch_tokens).to(dtype=torch.float32)
+    responses = norm_patch @ selected_weight.T
+    mean = responses.mean(dim=0, keepdim=True)
+    std = responses.std(dim=0, keepdim=True, unbiased=False)
+    p_hat = (responses - mean) / (std + eps)
+    q_tokens = F.normalize(p_hat, p=2, dim=-1, eps=eps)
+
+    importance = p_hat.max(dim=-1).values - p_hat.mean(dim=-1)
+    importance = (importance - importance.mean()) / (importance.std(unbiased=False) + eps)
+    return q_tokens, p_hat, importance, selected
 
 
 def _select_class_guided_seeds(p_hat: torch.Tensor) -> torch.Tensor:
@@ -250,8 +269,7 @@ def _repair_empty_clusters(
     for empty_center in empty_centers.tolist():
         donor_clusters = torch.nonzero(counts > 1, as_tuple=False).flatten()
         if donor_clusters.numel() == 0:
-            raise RuntimeError("cannot repair empty K-SemReduce cluster without a non-singleton donor")
-
+            raise RuntimeError("cannot repair empty cluster without a non-singleton donor")
         donor = _select_donor_cluster(q_tokens, centers, repaired, donor_clusters)
         donor_members = torch.nonzero(repaired == donor, as_tuple=False).flatten()
         donor_similarities = q_tokens[donor_members] @ centers[donor]
@@ -293,14 +311,14 @@ def _update_centers(
     for center_index in range(int(centers.shape[0])):
         member_mask = assignments == center_index
         if not bool(member_mask.any()):
-            raise RuntimeError("K-SemReduce cluster repair left an empty cluster")
+            raise RuntimeError("empty cluster remained after repair")
         weights = torch.exp(float(gamma) * importance[member_mask]).unsqueeze(-1)
         weighted = (weights * q_tokens[member_mask]).sum(dim=0, keepdim=True)
         updated.append(F.normalize(weighted, p=2, dim=-1, eps=eps).squeeze(0))
     return torch.stack(updated, dim=0)
 
 
-def _aggregate_k_prototypes(
+def _aggregate_prototypes(
     patch_tokens: torch.Tensor,
     q_tokens: torch.Tensor,
     importance: torch.Tensor,
@@ -312,7 +330,9 @@ def _aggregate_k_prototypes(
     temperature: float,
     lambda_importance: float,
     sort_by_position: bool,
-) -> SemReduceResult:
+    requested_k: int,
+    actual_k: int,
+) -> KSemReduceResult:
     prototypes = []
     masses = []
     soft_positions = []
@@ -350,20 +370,71 @@ def _aggregate_k_prototypes(
         prototype_order = prototype_order[order]
         assignments = _remap_assignments(assignments, order)
 
-    return SemReduceResult(
-        sequence=None,
+    return KSemReduceResult(
         patch_tokens=patch_result,
         assignments=assignments,
         centers=centers_result,
         selected_classes=selected_classes,
-        anchors=torch.empty(0, dtype=torch.long, device=patch_tokens.device),
+        seed_indices=seed_indices,
         masses=masses_result,
         soft_positions=positions_result,
         prototype_order=prototype_order,
+        requested_k=requested_k,
+        actual_k=actual_k,
     )
 
 
-def _resolve_k_config(
+def _prepare_positions(
+    positions: torch.Tensor | None,
+    num_patches: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if positions is None:
+        side = math.isqrt(num_patches)
+        if side * side == num_patches:
+            rows = torch.arange(side, device=device, dtype=torch.float32)
+            cols = torch.arange(side, device=device, dtype=torch.float32)
+            grid_y, grid_x = torch.meshgrid(rows, cols, indexing="ij")
+            return torch.stack([grid_y.flatten(), grid_x.flatten()], dim=-1)
+        row = torch.zeros(num_patches, device=device, dtype=torch.float32)
+        col = torch.arange(num_patches, device=device, dtype=torch.float32)
+        return torch.stack([row, col], dim=-1)
+    if positions.shape != (num_patches, 2):
+        raise ValueError(f"positions must have shape [{num_patches}, 2], got {tuple(positions.shape)}")
+    return positions.to(device=device, dtype=torch.float32)
+
+
+def _position_order(positions: torch.Tensor) -> torch.Tensor:
+    width = positions[:, 1].max().clamp(min=0.0) + 1.0
+    return torch.argsort(positions[:, 0] * width + positions[:, 1], stable=True)
+
+
+def _remap_assignments(assignments: torch.Tensor, order: torch.Tensor) -> torch.Tensor:
+    inverse = torch.empty_like(order)
+    inverse[order] = torch.arange(order.numel(), device=order.device)
+    return inverse[assignments]
+
+
+def _stack_results(results: list[KSemReduceResult]) -> KSemReduceResult:
+    return KSemReduceResult(
+        patch_tokens=torch.stack([item.patch_tokens for item in results], dim=0),
+        assignments=torch.stack([item.assignments for item in results], dim=0),
+        centers=torch.stack([item.centers for item in results], dim=0),
+        selected_classes=torch.stack([item.selected_classes for item in results], dim=0),
+        seed_indices=torch.stack([item.seed_indices for item in results], dim=0),
+        masses=torch.stack([item.masses for item in results], dim=0),
+        soft_positions=(
+            torch.stack([item.soft_positions for item in results], dim=0)
+            if all(item.soft_positions is not None for item in results)
+            else None
+        ),
+        prototype_order=torch.stack([item.prototype_order for item in results], dim=0),
+        requested_k=results[0].requested_k,
+        actual_k=results[0].actual_k,
+    )
+
+
+def _resolve_config(
     config: KSemReduceConfig | None,
     overrides: dict[str, object],
 ) -> KSemReduceConfig:
@@ -375,7 +446,7 @@ def _resolve_k_config(
     return KSemReduceConfig(**values)
 
 
-def _validate_k_config(cfg: KSemReduceConfig) -> None:
+def _validate_config(cfg: KSemReduceConfig) -> None:
     if cfg.num_semantic_classes <= 0:
         raise ValueError("num_semantic_classes must be positive")
     if cfg.iterations < 0:
@@ -384,3 +455,23 @@ def _validate_k_config(cfg: KSemReduceConfig) -> None:
         raise ValueError("temperature must be positive")
     if cfg.eps <= 0:
         raise ValueError("eps must be positive")
+
+
+def _make_norm(token_norm: TokenNorm) -> Callable[[torch.Tensor], torch.Tensor]:
+    if token_norm is None:
+        return lambda values: F.layer_norm(values.float(), values.shape[-1:])
+    return token_norm
+
+
+def _classifier_weight(classifier: torch.Tensor | nn.Module, device: torch.device) -> torch.Tensor:
+    weight = classifier
+    if isinstance(classifier, nn.Module):
+        if not hasattr(classifier, "weight"):
+            raise ValueError("classifier module must expose a .weight tensor")
+        weight = classifier.weight
+    if not isinstance(weight, torch.Tensor):
+        raise TypeError("classifier must be a Tensor or nn.Module with .weight")
+    if weight.ndim != 2:
+        raise ValueError(f"classifier weight must have shape [C, D], got {tuple(weight.shape)}")
+    return weight.to(device=device, dtype=torch.float32)
+

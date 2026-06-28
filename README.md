@@ -1,71 +1,94 @@
-# Visual Token Reduction
+# Visual Tokens Reduction
 
-This folder stages a ProtoReduce experiment for comparing vanilla LLaVA 13B
-against prototype-reduced visual tokens on POPE adversarial.
+This repository now contains a clean implementation of **K-SemReduce:
+Class-Prototype Guided Training-Free Visual Token Reduction**.
+
+The current version removes the old independent controls:
+
+```text
+no m
+no b
+no TopB
+no protected anchors
+```
+
+The only core control variable is `K`:
+
+```text
+K = number of Top-K candidate semantic classes
+K = semantic response dimension
+K = number of clustering centers
+K = number of output prototype tokens
+```
 
 ## Files
 
-- `proto_reduce.py`: standalone PyTorch implementation of ProtoReduce.
-- `run_llava13b_pope.py`: LLaVA 13B POPE runner with `vanilla` and
-  `proto_reduce` methods.
-- `ALGORITHM.md`: detailed explanation of the current ProtoReduce algorithm
-  and how it is inserted into LLaVA 13B.
-- `EARLY_SEMREDUCE_ALGORITHM.md`: very detailed derivation of the
-  Early-SemReduce semantic-response guided token reduction method.
-- `EARLY_SEMREDUCE_IMPLEMENTATION.md`: detailed notes on how the
-  Early-SemReduce code is implemented, including reducer internals, ViT
-  insertion, LLaVA hooks, placeholder handling, and POPE evaluation flow.
-- `requirements.txt`: Python dependencies for running the experiment.
-- `Visual_Token_Merge/`: Early-SemReduce, K-SemReduce, and Answer-Adaptive
-  K-SemReduce code, tests, MME runner, and detailed algorithm documentation.
-- `Visual_Token_Merge/ANSWER_ADAPTIVE_K_SEMREDUCE_ALGORITHM.md`: detailed
-  explanation of the current Answer-Adaptive K-SemReduce implementation.
+- `k_semreduce.py`: standalone PyTorch implementation of K-SemReduce.
+- `run_llava13b_mme.py`: LLaVA-1.5-13B MME runner comparing `vanilla` and
+  `k_semreduce`.
+- `K_SEMREDUCE_ALGORITHM.md`: detailed algorithm explanation.
+- `tests/test_k_semreduce.py`: unit tests for exact-K output, K clamping, and
+  non-duplicate class-guided seeds.
+- `requirements.txt`: Python dependencies.
 
-## Answer-Adaptive K-SemReduce
+## MME Run
 
-The newest experiment code is under `Visual_Token_Merge/`. It includes the MME
-runner for LLaVA-1.5-13B and the current dynamic rule:
+```bash
+PYTHONPATH=. python run_llava13b_mme.py \
+  --model-id llava-hf/llava-1.5-13b-hf \
+  --methods vanilla,k_semreduce \
+  --limit-images 300 \
+  --sampling stratified \
+  --candidate-classes 64 \
+  --cluster-iters 3 \
+  --temperature 0.1 \
+  --lambda-importance 0.25 \
+  --gamma 1.0 \
+  --load-in-4bit \
+  --output-dir ~/results/llava13b_k_semreduce_mme300_k64
+```
+
+For a quick smoke run:
+
+```bash
+PYTHONPATH=. python run_llava13b_mme.py \
+  --methods vanilla,k_semreduce \
+  --limit-images 5 \
+  --candidate-classes 64 \
+  --load-in-4bit \
+  --output-dir ~/results/llava13b_k_semreduce_mme5_k64
+```
+
+The runner writes:
 
 ```text
-K_Q = len(extract_question_hypotheses(question, category)) * hypothesis_multiplier
+vanilla.jsonl
+k_semreduce.jsonl
+summary.json
+category_metrics.csv
+dimension_metrics.csv
 ```
 
-The current experiment uses `hypothesis_multiplier = 1, 2, 3` and no longer
-uses minimum or maximum hypothesis bounds.
+## Implementation Note for LLaVA
 
-## Quick Run
+The algorithm description is written for inserting reduction after an
+intermediate visual encoder layer `ell`. In this LLaVA-1.5-13B runner, the
+practical insertion point is after the vision tower and multimodal projector,
+because the Hugging Face LLaVA interface exposes image features there. The
+runner then rewrites the number of `<image>` placeholders to match the reduced
+feature count.
+
+LLaVA does not expose an ImageNet-style visual classifier head at this stage, so
+the runner uses the frozen language embedding or LM head whose hidden dimension
+matches the image features as the surrogate semantic head. The K-SemReduce
+algorithm itself is unchanged: it still selects Top-K classifier rows, uses
+those rows to define the semantic response space, initializes one non-duplicate
+seed per candidate class, clusters all patches, and outputs exactly K prototype
+tokens unless K is larger than the number of input patch tokens.
+
+## Test
 
 ```bash
-python Visual_Token_Reduction/run_llava13b_pope.py \
-  --model-id llava-hf/llava-1.5-13b-hf \
-  --methods vanilla,proto_reduce \
-  --prototype-tokens 128 \
-  --cluster-iters 5 \
-  --temperature 0.07 \
-  --limit 100 \
-  --output-dir results/llava13b_proto_reduce_100
+python -m pytest tests
 ```
 
-For a local checkpoint, replace `--model-id` with the checkpoint path.
-
-If the 13B model does not fit, use quantization:
-
-```bash
-python Visual_Token_Reduction/run_llava13b_pope.py \
-  --model-id llava-hf/llava-1.5-13b-hf \
-  --load-in-4bit \
-  --methods vanilla,proto_reduce \
-  --prototype-tokens 128 \
-  --limit 100
-```
-
-## What Is Compared
-
-The script writes one JSONL per method plus `summary.json`. When both methods
-are enabled, the summary includes `delta_proto_minus_vanilla` for accuracy,
-precision, recall, F1, and yes ratio.
-
-ProtoReduce is applied after LLaVA's vision tower and multimodal projector
-produce image features. The script also adjusts the number of image token
-placeholders in the text input so the reduced feature count matches the model's
-expected image-token count.

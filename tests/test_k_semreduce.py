@@ -8,11 +8,11 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from early_semreduce import KSemReduce, KSemReduceConfig, k_semreduce  # noqa: E402
-from early_semreduce.k_reducer import _select_class_guided_seeds  # noqa: E402
+from k_semreduce import KSemReduce, KSemReduceConfig, k_semreduce  # noqa: E402
+from k_semreduce import _select_class_guided_seeds  # noqa: E402
 
 
-def test_k_semreduce_patch_only_outputs_exact_k() -> None:
+def test_k_semreduce_outputs_exact_k() -> None:
     torch.manual_seed(41)
     patch_tokens = torch.randn(25, 16)
     classifier = torch.randn(20, 16)
@@ -24,35 +24,35 @@ def test_k_semreduce_patch_only_outputs_exact_k() -> None:
         iterations=2,
     )
 
-    assert result.sequence is None
     assert result.patch_tokens.shape == (7, 16)
     assert result.centers.shape == (7, 7)
     assert result.selected_classes.shape == (7,)
-    assert result.anchors.numel() == 0
-    assert torch.equal(result.masses.sum(), torch.tensor(25))
+    assert result.masses.sum().item() == 25
     assert torch.all(result.masses > 0)
     assert result.assignments.shape == (25,)
     assert int(result.assignments.min()) >= 0
     assert int(result.assignments.max()) < 7
+    assert result.requested_k == 7
+    assert result.actual_k == 7
 
 
-def test_k_semreduce_sequence_keeps_cls_and_clamps_k_to_patch_count() -> None:
+def test_k_semreduce_clamps_k_to_patch_count() -> None:
     torch.manual_seed(43)
-    sequence = torch.randn(1, 6, 12)
+    patch_tokens = torch.randn(1, 5, 12)
     classifier = torch.randn(30, 12)
     reducer = KSemReduce(KSemReduceConfig(num_semantic_classes=10, iterations=1))
 
-    result = reducer(sequence, classifier)
+    result = reducer(patch_tokens, classifier)
 
-    assert result.sequence is not None
-    assert result.sequence.shape == (1, 6, 12)
     assert result.patch_tokens.shape == (1, 5, 12)
-    assert torch.equal(result.sequence[:, 0], sequence[:, 0])
-    assert torch.equal(result.masses.sum(dim=-1), torch.tensor([5]))
+    assert result.centers.shape == (1, 5, 5)
+    assert result.masses.sum(dim=-1).tolist() == [5]
     assert torch.all(result.masses > 0)
+    assert result.requested_k == 10
+    assert result.actual_k == 5
 
 
-def test_k_semreduce_non_duplicate_seed_selection() -> None:
+def test_class_guided_seed_selection_is_non_duplicate() -> None:
     p_hat = torch.tensor(
         [
             [5.0, 4.9, 4.8],
@@ -65,3 +65,4 @@ def test_k_semreduce_non_duplicate_seed_selection() -> None:
     seeds = _select_class_guided_seeds(p_hat)
 
     assert seeds.tolist() == [0, 2, 3]
+
