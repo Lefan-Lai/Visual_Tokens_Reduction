@@ -1,0 +1,15 @@
+torch>=2.4.0
+pytest>=8.0.0
+
+# Needed for POPE/LLaVA 13B evaluation.
+accelerate>=0.34.0
+bitsandbytes>=0.43.3
+datasets>=2.21.0
+huggingface_hub>=0.24.0
+pillow>=10.0.0
+safetensors>=0.4.5
+sentencepiece>=0.2.0
+transformers>=4.51.0
+
+# Optional, only needed for the timm ViT wrapper demo/integration.
+timm>=1.0.0

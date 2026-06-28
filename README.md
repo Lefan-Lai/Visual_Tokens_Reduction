@@ -16,6 +16,22 @@ against prototype-reduced visual tokens on POPE adversarial.
   Early-SemReduce code is implemented, including reducer internals, ViT
   insertion, LLaVA hooks, placeholder handling, and POPE evaluation flow.
 - `requirements.txt`: Python dependencies for running the experiment.
+- `Visual_Token_Merge/`: Early-SemReduce, K-SemReduce, and Answer-Adaptive
+  K-SemReduce code, tests, MME runner, and detailed algorithm documentation.
+- `Visual_Token_Merge/ANSWER_ADAPTIVE_K_SEMREDUCE_ALGORITHM.md`: detailed
+  explanation of the current Answer-Adaptive K-SemReduce implementation.
+
+## Answer-Adaptive K-SemReduce
+
+The newest experiment code is under `Visual_Token_Merge/`. It includes the MME
+runner for LLaVA-1.5-13B and the current dynamic rule:
+
+```text
+K_Q = len(extract_question_hypotheses(question, category)) * hypothesis_multiplier
+```
+
+The current experiment uses `hypothesis_multiplier = 1, 2, 3` and no longer
+uses minimum or maximum hypothesis bounds.
 
 ## Quick Run
 
