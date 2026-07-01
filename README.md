@@ -1,94 +1,43 @@
-# Visual Tokens Reduction
+# FORESIGHT for LLaVA-1.5-7B on POPE
 
-This repository now contains a clean implementation of **K-SemReduce:
-Class-Prototype Guided Training-Free Visual Token Reduction**.
+This repository contains only the FORESIGHT algorithm version used for the
+LLaVA-1.5-7B POPE run whose metadata says:
 
-The current version removes the old independent controls:
+- `reduction_strategy = foresight_dynamic_hypothesis_reduction`
+- `hypothesis_generation = per_image_token_residual_plus_text_embeddings`
+- `candidate_selection = omega_weighted_diversity_selection`
+- `evidence_rule = multiplicative_image_confidence_and_token_support`
 
-```text
-no m
-no b
-no TopB
-no protected anchors
-```
-
-The only core control variable is `K`:
-
-```text
-K = number of Top-K candidate semantic classes
-K = semantic response dimension
-K = number of clustering centers
-K = number of output prototype tokens
-```
+This is not the later protected-token / dual-space-clustering variant.
 
 ## Files
 
-- `k_semreduce.py`: standalone PyTorch implementation of K-SemReduce.
-- `run_llava13b_mme.py`: LLaVA-1.5-13B MME runner comparing `vanilla` and
-  `k_semreduce`.
-- `K_SEMREDUCE_ALGORITHM.md`: detailed algorithm explanation.
-- `tests/test_k_semreduce.py`: unit tests for exact-K output, K clamping, and
-  non-duplicate class-guided seeds.
-- `requirements.txt`: Python dependencies.
+- `FORESIGHT_ALGORITHM.md`: full algorithm description.
+- `IMPLEMENTATION_DETAILS.md`: hyperparameters, implementation mapping, and logging fields.
+- `foresight.py`: training-free visual-token reduction implementation.
+- `run_llava7b_pope.py`: LLaVA-1.5-7B POPE evaluation runner using FORESIGHT.
+- `launch_llava7b_pope.sh`: server launch script.
 
-## MME Run
+## Run
 
 ```bash
-PYTHONPATH=. python run_llava13b_mme.py \
-  --model-id llava-hf/llava-1.5-13b-hf \
-  --methods vanilla,k_semreduce \
-  --limit-images 300 \
-  --sampling stratified \
-  --candidate-classes 64 \
-  --cluster-iters 3 \
-  --temperature 0.1 \
-  --lambda-importance 0.25 \
-  --gamma 1.0 \
+python run_llava7b_pope.py \
+  --model-id llava-hf/llava-1.5-7b-hf \
+  --dataset-name lmms-lab/POPE \
+  --split test \
+  --category all \
+  --k-min 32 \
+  --k-max 128 \
+  --k-text 64 \
+  --rho 0.90 \
   --load-in-4bit \
-  --output-dir ~/results/llava13b_k_semreduce_mme300_k64
+  --output-dir results/llava7b_pope_foresight
 ```
 
-For a quick smoke run:
+On the Auckland server, use:
 
 ```bash
-PYTHONPATH=. python run_llava13b_mme.py \
-  --methods vanilla,k_semreduce \
-  --limit-images 5 \
-  --candidate-classes 64 \
-  --load-in-4bit \
-  --output-dir ~/results/llava13b_k_semreduce_mme5_k64
+./launch_llava7b_pope.sh
 ```
 
-The runner writes:
-
-```text
-vanilla.jsonl
-k_semreduce.jsonl
-summary.json
-category_metrics.csv
-dimension_metrics.csv
-```
-
-## Implementation Note for LLaVA
-
-The algorithm description is written for inserting reduction after an
-intermediate visual encoder layer `ell`. In this LLaVA-1.5-13B runner, the
-practical insertion point is after the vision tower and multimodal projector,
-because the Hugging Face LLaVA interface exposes image features there. The
-runner then rewrites the number of `<image>` placeholders to match the reduced
-feature count.
-
-LLaVA does not expose an ImageNet-style visual classifier head at this stage, so
-the runner uses the frozen language embedding or LM head whose hidden dimension
-matches the image features as the surrogate semantic head. The K-SemReduce
-algorithm itself is unchanged: it still selects Top-K classifier rows, uses
-those rows to define the semantic response space, initializes one non-duplicate
-seed per candidate class, clusters all patches, and outputs exactly K prototype
-tokens unless K is larger than the number of input patch tokens.
-
-## Test
-
-```bash
-python -m pytest tests
-```
-
+The runner prints per-sample progress and writes JSONL/CSV/summary files.

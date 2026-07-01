@@ -1,8 +1,7 @@
 torch
 transformers
+datasets
 accelerate
 bitsandbytes
-datasets
 pillow
-pytest
-
+tqdm
